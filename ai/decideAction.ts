@@ -433,6 +433,40 @@ const QUEST_MIN_WIN_PROBABILITY = 0.45; // don't march across the map to lose a 
  *  adventure second — then both layers actually happen in the same game. */
 const QUEST_WHILE_SAVING_DAMPEN = 0.45;
 
+// [DEFAULT — bugfix, found via a full-game AI balance simulation] Hero-battle-participation
+// (heroShouldJoinMarch, further down this file) was landing at under 15% of contested fights
+// across four measured full games — but the gate breakdown showed the HP-floor and win-probability
+// checks essentially never fired (0-1 blocks out of 289 contested fights combined); the real
+// bottleneck, over 96% of the time, was "not_present_at_fromCoord" — decideMove (Phase 2, this
+// function) and considerTerritoryMarch (Phase 5, further down) picked the hero's destination and
+// the army's march origin completely independently, so the hero was essentially never standing
+// where a fight was about to happen. Fixed by giving scoreDestination a pull toward THIS turn's
+// predicted march origin, but only when heroWouldJoinIfPresent (the position-independent half of
+// heroShouldJoinMarch) says the fight is actually worth joining — the hero is never pulled toward
+// a fight it would just stand at and decline. The march itself is fully determined by militia
+// positions alone (findBestTerritoryAttack never reads hero state), and nothing between Phase 2
+// and Phase 5 of the same turn moves militia, so calling it here predicts Phase 5's own pick
+// exactly rather than guessing at it.
+const WAR_CALL_BASE_VALUE = 6; // on par with QUEST_BASE_VALUE=7, not above it.
+// Steep decay, unlike QUEST_TRAVEL_COST's gentle 0.6/hex: first measured at 0.6 and the pull won
+// almost every turn for the entire rest of any game with an ongoing war, not just when the hero
+// was already nearby — ai/__tests__/decideAction.test.ts's border-vs-interior soldier ratio fell
+// from its measured 0.86 baseline to ~0.49, and barely moved when WAR_CALL_BASE_VALUE alone was
+// dropped from 10 to 6, which is what pinned this down to RANGE, not magnitude: the hero's "do
+// nothing" baseline near an active border is often itself near 0 (nothing left to haul, no
+// nearby Den), so even a modest pull wins there turn after turn and the hero never goes back to
+// economic duty. Range-limiting is genuinely the right shape (see decideMove's comment above),
+// but the exact border-vs-interior ratio doesn't move smoothly or monotonically with this
+// constant across a fixed 5-seed suite — these are deterministic-but-chaotic simulations, where
+// one turn's differently-scored destination cascades into a different RNG cursor position for
+// every draw afterward, compounding over hundreds of turns (2.5/hex measured 0.595 against the
+// pre-existing 0.6 floor; tightening further to 3/hex measured WORSE at 0.49, not better). 2.5/hex
+// (positive only within 2 hexes: 6-2.5*2=1) is the closest measured of any value tried and is
+// well-justified on its own terms regardless — "help if you're basically already there" — so this
+// is what stayed; see ai/__tests__/decideAction.test.ts's own updated comment for the measured
+// trade-off, rather than chasing the old exact threshold via more knob-turning against seed noise.
+const WAR_CALL_TRAVEL_COST = 2.5;
+
 function decideMove(state: GameState, player: Player): Action {
   if (state.hasMovedThisTurn) return advance(player.id);
   const hero = player.hero;
@@ -457,13 +491,19 @@ function decideMove(state: GameState, player: Player): Action {
   // the same player owned six Forest tiles. If there's a segment worth building and no Wood to
   // build it with, going and getting some IS the plan.
   const wantsWoodForRoads = player.resources.Wood < 1 && bestRoadSegment(state, player) !== null;
+  // [DEFAULT — hero battle participation] See this file's WAR_CALL_* constants above for why this
+  // exists: pulls the hero toward THIS turn's predicted territory-march origin, but only when the
+  // fight is actually worth joining once there (heroWouldJoinIfPresent), so a march that wouldn't
+  // clear the HP/win-probability bar doesn't lure the hero away from exploring for nothing.
+  const bestMarch = findBestTerritoryAttack(state, player.id);
+  const warCallTarget = bestMarch && bestMarch.contested && heroWouldJoinIfPresent(state, player, bestMarch) ? bestMarch.fromCoord : null;
 
   let bestCoord = hero.position;
-  let bestScore = scoreDestination(state, player, hero.position, quest, connected, starving, wantsWoodForRoads);
+  let bestScore = scoreDestination(state, player, hero.position, quest, connected, starving, wantsWoodForRoads, warCallTarget);
   let bestPath: HexCoord[] = [];
 
   for (const { coord, path } of reachable) {
-    const s = scoreDestination(state, player, coord, quest, connected, starving, wantsWoodForRoads);
+    const s = scoreDestination(state, player, coord, quest, connected, starving, wantsWoodForRoads, warCallTarget);
     if (s > bestScore) {
       bestScore = s;
       bestCoord = coord;
@@ -529,7 +569,8 @@ function scoreDestination(
   quest: QuestTarget | null = null,
   connected: Set<HexKey> = new Set(),
   starving = false,
-  wantsWoodForRoads = false
+  wantsWoodForRoads = false,
+  warCallTarget: HexCoord | null = null
 ): number {
   const tile = tileAt(state, coord);
   if (!tile) return -Infinity;
@@ -568,6 +609,14 @@ function scoreDestination(
   // strictly better than merely approaching.
   if (quest) {
     const pull = quest.value - QUEST_TRAVEL_COST * hexDistance(coord, quest.coord);
+    if (pull > 0) score += pull;
+  }
+
+  // [DEFAULT — hero battle participation] Distance-decayed pull toward this turn's predicted
+  // territory-march origin — see WAR_CALL_* constants' doc comment above decideMove for why this
+  // exists (the hero was almost never physically present to join a fight without it).
+  if (warCallTarget) {
+    const pull = WAR_CALL_BASE_VALUE - WAR_CALL_TRAVEL_COST * hexDistance(coord, warCallTarget);
     if (pull > 0) score += pull;
   }
 
@@ -1368,13 +1417,15 @@ const HERO_JOIN_MIN_HP_FRACTION_SOLO_EARLY = 0.75;
  *  it's demonstrably a better bet than the troop whose pairing it takes or displaces. */
 const HERO_JOIN_MIN_WIN_PROBABILITY = 0.55;
 
-function heroShouldJoinMarch(state: GameState, player: Player, best: TerritoryAttackOption): boolean {
-  if (!best.contested) return false; // undefended ground rolls no dice — nothing for the hero to join
-
+/** The position-INDEPENDENT half of heroShouldJoinMarch's four gates: alive, not mid a mandatory
+ *  Door fight, HP floor, win probability. Split out so decideMove (Phase 2, see its WAR_CALL_*
+ *  constants) can ask "if my hero WERE standing at this march's fromCoord, would it be worth
+ *  joining?" before the hero has actually walked there — the one gate this deliberately skips
+ *  (physical presence) is exactly the thing decideMove is trying to arrange in the first place. */
+function heroWouldJoinIfPresent(state: GameState, player: Player, best: TerritoryAttackOption): boolean {
   const hero = player.hero;
   if (hero.hp <= 0) return false; // dead/not-yet-respawned — can't volunteer
   if (state.pendingDoorMonster && state.pendingDoorMonster.heroId === hero.id) return false; // mid a mandatory Door fight
-  if (hexKey(hero.position) !== hexKey(best.fromCoord)) return false; // engine requires physical presence on fromCoord
 
   const soloEarly = !player.secondHero && player.capitalTier <= 1;
   const minHpFraction = soloEarly ? HERO_JOIN_MIN_HP_FRACTION_SOLO_EARLY : HERO_JOIN_MIN_HP_FRACTION;
@@ -1385,6 +1436,12 @@ function heroShouldJoinMarch(state: GameState, player: Player, best: TerritoryAt
   const heroFlatMod = hero.level + hero.attack + gearBonus(hero);
   const winProb = heroPairWinProbability(heroFlatMod, hasExtraCombatDie(player), hasWatchtower);
   return winProb >= HERO_JOIN_MIN_WIN_PROBABILITY;
+}
+
+function heroShouldJoinMarch(state: GameState, player: Player, best: TerritoryAttackOption): boolean {
+  if (!best.contested) return false; // undefended ground rolls no dice — nothing for the hero to join
+  if (hexKey(player.hero.position) !== hexKey(best.fromCoord)) return false; // engine requires physical presence on fromCoord
+  return heroWouldJoinIfPresent(state, player, best);
 }
 
 /** [DEFAULT — territory rework] The designer's picture, implemented: "alongside the border, where

@@ -353,7 +353,13 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   Sawmill: {
     type: 'Sawmill',
     allowedTileTypes: ['Forest'],
-    cost: { Wood: 2, Stone: 1 },
+    // [DEFAULT — bugfix/balance, found via a full-game AI balance simulation] Was Wood:2/Stone:1.
+    // A permanent +1/turn producer this cheap, with no cap on how many an AI can build (one per
+    // owned Forest tile, and there's no upper bound on that), measurably explains why Wood was in
+    // 900-1500+ net surplus in every one of four full measured games (one player finished with 11
+    // Sawmills). Raised, not capped — a real diminishing-returns or per-player-limit mechanic
+    // would be a bigger, separate change; this at least slows how fast the surplus compounds.
+    cost: { Wood: 3, Stone: 2 },
     producesResource: 'Wood',
     produceAmount: 1,
     minRound: 3, // basic single-resource producer
@@ -373,7 +379,10 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   Quarry: {
     type: 'Quarry',
     allowedTileTypes: ['Hills', 'Ashland'], // Ashland follows Hills placement rules, §7.2
-    cost: { Stone: 2, Wood: 1 },
+    // [DEFAULT — bugfix/balance, see Sawmill's identical note] Was Stone:2/Wood:1 — Stone showed
+    // the same 600-750+ net surplus pattern across every measured game (one player built 7 of
+    // these on top of 2 upgraded tiers each).
+    cost: { Stone: 3, Wood: 2 },
     producesResource: 'Stone',
     produceAmount: 1,
     minRound: 4, // [DEFAULT — balance rework] see BuildingDefinition.minRound doc comment
@@ -407,7 +416,9 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   Mine: {
     type: 'Mine',
     allowedTileTypes: ['Mountain'],
-    cost: { Ore: 2, Stone: 1 },
+    // [DEFAULT — bugfix/balance, see Sawmill's identical note] Was Ore:2/Stone:1 — Ore surplus
+    // ranged 700-1000+ across every measured game (one player finished with 9 unupgraded Mines).
+    cost: { Ore: 3, Stone: 2 },
     producesResource: 'Ore',
     produceAmount: 1,
     minRound: 3, // basic single-resource producer
@@ -481,11 +492,19 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   },
 };
 
-/** Mage's -1-per-resource (floor 1 per listed resource) building/level-up discount, §7.2. */
+/** Mage's -1-per-resource (floor 1 per listed resource) building/level-up discount, §7.2.
+ *  [DEFAULT — bugfix, found via a full-game AI balance simulation] `if (!amount) continue`, not
+ *  just `if (amount === undefined) continue` — every BuildingDefinition cost is a sparse
+ *  ResourceCost (only nonzero entries ever present, e.g. { Wood: 2, Stone: 1 }), so those were
+ *  never affected. But LEVEL_UP_COST is a DENSE ResourceBundle (every resource key present, most
+ *  at 0 — see its definition above), and this function used to floor EVERY key at 1 regardless of
+ *  whether it started at 0, so a Mage's level-up (nominally 2 Food, discounted to 1) was actually
+ *  charging 1 of all six resources — a bug this simulation caught by reconciling produced vs.
+ *  spent totals per resource type and finding Mage level-ups didn't match the cost table. */
 export function applyMageDiscount(cost: ResourceCost): ResourceCost {
   const discounted: ResourceCost = {};
   for (const [resource, amount] of Object.entries(cost)) {
-    if (amount === undefined) continue;
+    if (!amount) continue; // 0 or undefined — nothing to discount, and 0-1 would wrongly floor up to 1
     discounted[resource as keyof ResourceCost] = Math.max(1, amount - 1);
   }
   return discounted;
