@@ -88,6 +88,14 @@ body {
   color: var(--color-hx-bg);
 }
 
+/* Tailwind's Preflight resets <button> to cursor: default — every button in the app should read
+   as clickable on hover, whether it goes through uiClasses.ts's BTN_* classes or is hand-rolled
+   (e.g. the "← Back" links). Scoped to :not(:disabled) so disabled buttons correctly keep
+   cursor-not-allowed (set explicitly in uiClasses.ts) instead of being overridden back to pointer. */
+button:not(:disabled) {
+  cursor: pointer;
+}
+
 /* Thin, warm scrollbars instead of the default grey system chrome. */
 * {
   scrollbar-width: thin;
