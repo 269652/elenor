@@ -66,12 +66,12 @@ export function LandingPage({ supabaseConfigured }: { supabaseConfigured: boolea
               className={BTN_PRIMARY}
               style={{ padding: '1rem 1.5rem', fontSize: '1rem' }}
             >
-              🪑 Play Local (Hotseat) — works right now, no setup
+              🪑 Play Local (Hotseat)
             </button>
             <button type="button" onClick={() => setTab('p2p')} className={BTN_SECONDARY}>
-              🔗 Play P2P (WebRTC) — works right now, no setup
+              🔗 Play P2P (WebRTC)
             </button>
-            <button type="button" onClick={() => setTab('online')} className={BTN_GHOST}>
+            <button type="button" disabled title="Coming soon" className={BTN_GHOST}>
               🌐 Play Online (Realtime / Async)
             </button>
           </div>
