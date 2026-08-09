@@ -1,0 +1,70 @@
+// HexRealms persistence schema — see docs/architecture.md §5.
+//
+// GameState is stored as a single JSONB blob per game row (not normalized), because the
+// reducer consumes/produces the whole shape as one unit (load -> reduce -> save). `version`
+// lives on the `games` row (optimistic concurrency), NOT inside the GameState JSON itself —
+// see docs/architecture.md's reconciled §2 note on this split.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Room {
+  id          String   @id @default(cuid())
+  roomCode    String   @unique
+  status      String   @default("lobby") // "lobby" | "active" | "finished"
+  hostPlayerId String?
+  createdAt   DateTime @default(now())
+
+  players Player[]
+  game    Game?
+
+  @@map("rooms")
+}
+
+model Player {
+  id            String   @id @default(cuid())
+  roomId        String
+  room          Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  displayName   String
+  sessionSecret String
+  isHost        Boolean  @default(false)
+  joinedAt      DateTime @default(now())
+
+  @@unique([roomId, sessionSecret])
+  @@map("room_players")
+}
+
+model Game {
+  id        String   @id @default(cuid())
+  roomId    String   @unique
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  state     Json // the authoritative GameState blob (engine/types.ts)
+  version   Int      @default(1) // optimistic-concurrency counter for submitAction writes
+  updatedAt DateTime @updatedAt
+
+  events GameEventRow[]
+
+  @@map("games")
+}
+
+// Optional but cheap append-only action log — enables replay/debugging and a future
+// spectator mode "for free" (rebuild any prior state from seed + log). See engine/types.ts
+// GameEvent for the shape stored in `payload`.
+model GameEventRow {
+  id        String   @id @default(cuid())
+  gameId    String
+  game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  seq       Int
+  action    Json
+  createdAt DateTime @default(now())
+
+  @@unique([gameId, seq])
+  @@map("game_events")
+}

@@ -1,26 +1,98 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/**
+ * Hexrealms design tokens — "Illuminated Atlas": a warm, lantern-lit fantasy cartography
+ * palette pulled from the commissioned tile paintings (public/artworks/tiles/), not a generic
+ * dark-mode grey. Always dark — this is a game board, not a document, no light-mode branch.
+ * Tailwind v4 auto-generates utilities from these (--color-hx-gold -> bg-hx-gold/text-hx-gold/
+ * border-hx-gold, etc.) — every component should style through these tokens, not raw hex.
+ */
+@theme {
+  --color-hx-bg: #14110c;
+  --color-hx-panel: #1f1a12;
+  --color-hx-panel-2: #2a2317;
+  --color-hx-border: #3d3320;
+  --color-hx-border-strong: #5c4a26;
+  --color-hx-ink: #f0e6cf;
+  --color-hx-ink-dim: #b8a97e;
+  --color-hx-ink-faint: #8a7c58;
+  --color-hx-gold: #d9a441;
+  --color-hx-gold-bright: #f2c869;
+  --color-hx-copper: #c1652f;
+  --color-hx-moss: #6f9457;
+  --color-hx-blood: #b23a3a;
+  --color-hx-arcane: #8c6cd0;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Motion — pair every one of these with Tailwind's `motion-safe:` variant at the call site
+     so prefers-reduced-motion disables them automatically; never used bare. */
+  --animate-fade-up: hx-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-shimmer: hx-shimmer 2.6s ease-in-out infinite;
+  --animate-ken-burns: hx-ken-burns 32s ease-in-out infinite alternate;
+  --animate-pop: hx-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-float: hx-float 5s ease-in-out infinite;
+  /* [DEFAULT — Munchkin exploration layer] Door/Treasure card draw — see
+     components/hero/DoorCardPanel.tsx. Two-part reveal: hx-card-deal is the card flying out of
+     its pile (decorative, motion-safe:-gated like everything else above — its resting state with
+     no animation applied is already correct: opaque, untransformed); hx-card-flip is the
+     face-turn that actually SHOWS the drawn card, so unlike the rest of this list it is applied
+     unconditionally rather than behind motion-safe: (see that file's header comment) — pair it
+     with motion-reduce:[animation-duration:1ms] at the call site instead, which keeps the reveal
+     instant-but-correct rather than skipped. */
+  --animate-card-deal: hx-card-deal 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-card-flip: hx-card-flip 0.6s cubic-bezier(0.65, 0, 0.35, 1) 0.38s both;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@keyframes hx-fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes hx-shimmer {
+  0%, 100% { box-shadow: 0 0 10px -2px rgba(217, 164, 65, 0.65); }
+  50% { box-shadow: 0 0 20px 0px rgba(242, 200, 105, 0.95); }
+}
+@keyframes hx-ken-burns {
+  from { transform: scale(1.02) translate(0, 0); }
+  to { transform: scale(1.1) translate(-1.2%, -1.2%); }
+}
+@keyframes hx-pop {
+  0% { opacity: 0; transform: scale(0.7) translateY(8px); }
+  60% { opacity: 1; transform: scale(1.06) translateY(0); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes hx-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(ellipse 1100px 700px at 50% -8%, rgba(217, 164, 65, 0.10), transparent 60%),
+    radial-gradient(ellipse 900px 650px at 105% 105%, rgba(140, 108, 208, 0.07), transparent 60%),
+    var(--color-hx-bg);
+  background-attachment: fixed;
+  color: var(--color-hx-ink);
+  font-family: var(--font-sans);
 }
+
+::selection {
+  background: var(--color-hx-gold);
+  color: var(--color-hx-bg);
+}
+
+/* Thin, warm scrollbars instead of the default grey system chrome. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hx-border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--color-hx-border-strong); border-radius: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
