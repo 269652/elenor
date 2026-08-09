@@ -14,13 +14,14 @@
  * because this component just got new props, there's no external system to subscribe to.
  *
  * Why events AND a hero-state diff, not just one: CombatResolved's payload carries the outcome
- * ('won'/'lost') and the HP cost per SIDE, but never which specific hero (primary vs second hero)
- * was involved — grantXp's win case pushes no event at all. So a qualifying CombatResolved event
- * gates "something happened to this player's hero," and comparing that player's hero/secondHero
- * xp (win) or hp (loss) against the previous render's snapshot — matched by hero.id, which is
- * stable across a permadeath respawn (respawnHeroFromDeath reuses the same id) — pins down which
- * one and by how much. HeroDied is the one exception: its payload already carries heroId directly
- * (and hp-diffing can't spot a death anyway, since a fresh hero spawns at full HP, not lower).
+ * ('won'/'lost') and the HP cost per SIDE, but never confirms it was THIS player's hero specifically
+ * (vs. some other reason the event fired) — grantXp's win case pushes no event at all. So a
+ * qualifying CombatResolved event gates "something happened to this player's hero," and comparing
+ * that player's hero xp (win) or hp (loss) against the previous render's snapshot — matched by
+ * hero.id, which is stable across a permadeath respawn (respawnHeroFromDeath reuses the same id) —
+ * confirms it and by how much. HeroDied is the one exception: its payload already carries heroId
+ * directly (and hp-diffing can't spot a death anyway, since a fresh hero spawns at full HP, not
+ * lower).
  *
  * Deliberately NOT scoped to "the local player" — GameBoardApp has no such concept to hand it
  * (see OnlineGameClient.tsx: myPlayerId never reaches GameBoardApp, only isMyTurn does), and in
@@ -33,7 +34,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { GameState, HeroState, Player } from '@/engine';
 
 function heroesOf(player: Player): HeroState[] {
-  return player.secondHero ? [player.hero, player.secondHero] : [player.hero];
+  return [player.hero];
 }
 
 interface CombatResolvedPayload {
@@ -51,9 +52,9 @@ interface HeroDiedPayload {
 }
 
 type BattleNotice =
-  | { kind: 'won'; playerName: string; playerColor: string; isSecondHero: boolean; xp: number }
-  | { kind: 'hurt'; playerName: string; playerColor: string; isSecondHero: boolean; damage: number; hp: number; maxHp: number }
-  | { kind: 'died'; playerName: string; playerColor: string; isSecondHero: boolean };
+  | { kind: 'won'; playerName: string; playerColor: string; xp: number }
+  | { kind: 'hurt'; playerName: string; playerColor: string; damage: number; hp: number; maxHp: number }
+  | { kind: 'died'; playerName: string; playerColor: string };
 
 interface QueuedNotice {
   seq: string;
@@ -122,11 +123,11 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
           const seq = `battle-${evt.seq}-${s.side}`;
 
           if (found.died) {
-            notices.push({ seq, notice: { kind: 'died', playerName: player.name, playerColor: player.color, isSecondHero: found.hero.isSecondHero } });
+            notices.push({ seq, notice: { kind: 'died', playerName: player.name, playerColor: player.color } });
           } else if (s.outcome === 'won') {
             notices.push({
               seq,
-              notice: { kind: 'won', playerName: player.name, playerColor: player.color, isSecondHero: found.hero.isSecondHero, xp: found.hero.xp - found.prevHero.xp },
+              notice: { kind: 'won', playerName: player.name, playerColor: player.color, xp: found.hero.xp - found.prevHero.xp },
             });
           } else {
             const damage = typeof s.damage === 'number' ? s.damage : found.prevHero.hp - found.hero.hp;
@@ -136,7 +137,6 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
                 kind: 'hurt',
                 playerName: player.name,
                 playerColor: player.color,
-                isSecondHero: found.hero.isSecondHero,
                 damage,
                 hp: found.hero.hp,
                 maxHp: found.hero.maxHp,
@@ -164,7 +164,6 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
 
   if (!active) return null;
   const { notice } = active;
-  const heroLabel = notice.isSecondHero ? 'second hero' : 'hero';
 
   if (notice.kind === 'died') {
     return (
@@ -172,7 +171,7 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
         <span className="text-lg" aria-hidden="true">💀</span>
         <div className="flex flex-1 flex-col gap-0.5">
           <span className="font-display text-sm font-bold text-hx-blood">
-            <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s {heroLabel} has fallen — permanently
+            <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s hero has fallen — permanently
           </span>
           <span className="text-[11px] text-hx-ink-dim">
             Lost in the field to Army vs Territory combat. A fresh level-1 hero has taken their place — no gear, XP, levels, or curses carried over.
@@ -190,7 +189,7 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
       <div className="flex items-center gap-2 rounded-sm border border-hx-moss/60 bg-hx-moss/15 px-2.5 py-1.5 text-xs text-hx-ink">
         <span aria-hidden="true">🗡️</span>
         <span className="flex-1">
-          <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s {heroLabel} won its clash — +{notice.xp} XP
+          <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s hero won its clash — +{notice.xp} XP
         </span>
         <button type="button" onClick={dismiss} className="shrink-0 text-hx-ink-faint transition hover:text-hx-ink" aria-label="Dismiss">
           ✖
@@ -203,7 +202,7 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
     <div className="flex items-center gap-2 rounded-sm border border-hx-copper/60 bg-hx-copper/15 px-2.5 py-1.5 text-xs text-hx-ink">
       <span aria-hidden="true">🩸</span>
       <span className="flex-1">
-        <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s {heroLabel} took {notice.damage} HP in the clash ({notice.hp}/{notice.maxHp} HP left)
+        <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s hero took {notice.damage} HP in the clash ({notice.hp}/{notice.maxHp} HP left)
       </span>
       <button type="button" onClick={dismiss} className="shrink-0 text-hx-ink-faint transition hover:text-hx-ink" aria-label="Dismiss">
         ✖

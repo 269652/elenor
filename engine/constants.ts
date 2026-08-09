@@ -234,7 +234,7 @@ export const CAPITAL_TIERS = [
   { tier: 1, cost: {} as ResourceCost, heroMaxHpBonus: 2 }, // granted free at spawn
   { tier: 2, cost: { Wood: 3, Stone: 3, Food: 3 } as ResourceCost, heroMaxHpBonus: 3 },
   { tier: 3, cost: { Stone: 4, Ore: 3, Food: 4 } as ResourceCost, heroMaxHpBonus: 3 },
-  { tier: 4, cost: { Ore: 5, Gold: 5 } as ResourceCost, unlocksSecondHero: true, requiresVp: 10, heroMaxHpBonus: 3 },
+  { tier: 4, cost: { Ore: 5, Gold: 5 } as ResourceCost, heroMaxHpBonus: 3 },
   { tier: 5, cost: { Gold: 8, Ore: 6, Stone: 6 } as ResourceCost, heroMaxHpBonus: 5 },
 ] as const;
 

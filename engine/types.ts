@@ -284,7 +284,6 @@ export interface DoorDeckState {
 export interface HeroState {
   id: string;
   ownerId: PlayerId;
-  isSecondHero: boolean; // Capital upgrade unlock, high VP milestone
   level: number; // 1-10
   hp: number;
   maxHp: number;
@@ -313,9 +312,7 @@ export interface HeroState {
   carriedResources: ResourceBundle;
   /** [DEFAULT — Munchkin exploration layer] Every HexKey this hero has ever stood on, starting
    *  with their spawn tile (setup.ts). The FIRST time it grows to include a given key —
-   *  i.e. the hero arriving somewhere new — triggers a Door card draw in applyMoveHero. Kept
-   *  per-hero (not per-player) so a second hero unlocked at Town tier 4 explores independently
-   *  rather than inheriting the first hero's discoveries. */
+   *  i.e. the hero arriving somewhere new — triggers a Door card draw in applyMoveHero. */
   visitedTiles: HexKey[];
 }
 
@@ -333,7 +330,6 @@ export interface Player {
   capitalTile: HexCoord;
   capitalTier: number;
   hero: HeroState;
-  secondHero: HeroState | null;
   victoryPoints: number;
   isEliminated: boolean;
   /** [give, receive] — default [4,1]; [2,1] via Trade Post; [3,1] via Merchant class. */

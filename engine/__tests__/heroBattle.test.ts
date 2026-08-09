@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyAction } from '../reducer';
 import { heroBattleDamage, resolveArmyVsTerritory, type HeroRollBreakdown } from '../combat';
 import { RngStream } from '../rng';
-import { BASE_HERO_STATS, CAPITAL_TIERS, HERO_BATTLE_DAMAGE_FLOOR, HERO_BATTLE_XP_ON_WIN } from '../constants';
+import { CAPITAL_TIERS, HERO_BATTLE_DAMAGE_FLOOR, HERO_BATTLE_XP_ON_WIN } from '../constants';
 import { hexKey, IllegalActionError, Phase } from '../types';
 import type { GameState, HexCoord, Player, PlayerId, Tile } from '../types';
 import { findCursorForDie, makeHero, makePlayer, makeTile } from './testUtils';
@@ -337,19 +337,12 @@ describe('applyMoveSoldiers: a defending hero participates automatically, no fla
   });
 });
 
-// ── freshHeroState — the shared factory this feature needed for permadeath respawn ─────────
-// Building it surfaced a pre-existing gap: the Town-tier-4 second-hero unlock hardcoded
-// hp:10/maxHp:10/attack:1 with NONE of the class or Town-tier bonuses the PRIMARY hero always
-// got (setup.ts). These tests guard that fix directly, via the real Build action, not just
-// freshHeroState in isolation — the wiring (capitalTier already incremented, VP-gate, cost) is
-// exactly where a fix like this is most likely to be applied at the wrong moment.
-
-function accumulatedTownHpBonus(tier: number): number {
-  return CAPITAL_TIERS.slice(0, tier).reduce((sum, t) => sum + ('heroMaxHpBonus' in t ? t.heroMaxHpBonus : 0), 0);
-}
-
-describe('applyBuild: Capital tier 4 unlock now gives the second hero the same bonuses the first hero gets', () => {
-  it("a Warrior's second hero spawns with the class attack bonus and the full accumulated Town HP bonus, not hardcoded hp:10/attack:1", () => {
+// [DEFAULT — second hero removed] This file previously also covered freshHeroState via the
+// Town-tier-4 second-hero unlock (a shared factory fix that surfaced a gap where that unlock
+// hardcoded hp:10/attack:1 with none of setup.ts's class/Town-tier bonuses). The second-hero
+// feature itself was removed rather than kept working — see git history for both.
+describe('applyBuild: Capital tier upgrades still bump the hero\'s maxHp correctly', () => {
+  it('bumps hero.maxHp/hp by the new tier\'s heroMaxHpBonus', () => {
     const capitalTile: HexCoord = { q: 0, r: 0 };
     const dummyOwnedTiles: HexCoord[] = Array.from({ length: 10 }, (_, i) => ({ q: 50 + i, r: 50 }));
     const p1 = makePlayer(
@@ -371,53 +364,14 @@ describe('applyBuild: Capital tier 4 unlock now gives the second hero the same b
       }),
     ];
     const state = fixtureState([p1], tiles);
-    const after = applyAction(state, { type: 'Build', actorId: 'p1', buildingType: 'Capital', coord: capitalTile });
-    const player = playerIn(after, 'p1');
-
-    expect(player.capitalTier).toBe(4);
-    expect(player.secondHero).not.toBeNull();
-    expect(player.secondHero!.isSecondHero).toBe(true);
-    expect(player.secondHero!.level).toBe(1);
-    expect(player.secondHero!.attack).toBe(BASE_HERO_STATS.attack + 2); // Warrior's startingWeaponAttackBonus
-    const expectedMaxHp = BASE_HERO_STATS.maxHp + accumulatedTownHpBonus(4); // no Farmer bonus for a Warrior
-    expect(player.secondHero!.maxHp).toBe(expectedMaxHp);
-    expect(player.secondHero!.hp).toBe(expectedMaxHp);
-    expect(player.secondHero!.position).toEqual(capitalTile);
-  });
-
-  it('a later Town tier upgrade bumps BOTH heroes\' maxHp, not just the first', () => {
-    const capitalTile: HexCoord = { q: 0, r: 0 };
-    const dummyOwnedTiles: HexCoord[] = Array.from({ length: 10 }, (_, i) => ({ q: 50 + i, r: 50 }));
-    const existingSecondHero = makeHero({ id: 'p1-hero-2', ownerId: 'p1', isSecondHero: true, position: capitalTile, hp: 15, maxHp: 15 });
-    const p1 = makePlayer(
-      {
-        id: 'p1',
-        capitalTile,
-        ownedTiles: [capitalTile, ...dummyOwnedTiles],
-        capitalTier: 4,
-        secondHero: existingSecondHero,
-        resources: { Gold: 30, Ore: 30, Stone: 30 },
-      },
-      'Farmer'
-    );
-    const tiles: Tile[] = [
-      makeTile({
-        coord: capitalTile,
-        type: 'Plains',
-        ownerId: 'p1',
-        building: { id: 'cap', type: 'Capital', coord: capitalTile, ownerId: 'p1', tier: 4 },
-      }),
-    ];
-    const state = fixtureState([p1], tiles);
     const before = playerIn(state, 'p1');
     const after = applyAction(state, { type: 'Build', actorId: 'p1', buildingType: 'Capital', coord: capitalTile });
     const player = playerIn(after, 'p1');
-    const tier5Bonus = CAPITAL_TIERS[4].heroMaxHpBonus;
+    const tier4Bonus = CAPITAL_TIERS[3].heroMaxHpBonus;
 
-    expect(player.capitalTier).toBe(5);
-    expect(player.hero.maxHp).toBe(before.hero.maxHp + tier5Bonus);
-    expect(player.secondHero!.maxHp).toBe(existingSecondHero.maxHp + tier5Bonus);
-    expect(player.secondHero!.id).toBe('p1-hero-2'); // untouched, not respawned
+    expect(player.capitalTier).toBe(4);
+    expect(player.hero.maxHp).toBe(before.hero.maxHp + tier4Bonus);
+    expect(player.hero.hp).toBe(before.hero.hp + tier4Bonus);
   });
 });
 

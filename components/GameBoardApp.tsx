@@ -647,7 +647,7 @@ function PhaseActions(props: PhaseActionsProps) {
 
     case Phase.Fight: {
       const tile = tileAt(state, hero.position);
-      const rivalHeroHere = state.players.find((p) => p.id !== player.id && (samePos(p.hero.position, hero.position) || (p.secondHero && samePos(p.secondHero.position, hero.position))));
+      const rivalHeroHere = state.players.find((p) => p.id !== player.id && samePos(p.hero.position, hero.position));
 
       return (
         <div className="flex flex-col gap-2">
@@ -677,7 +677,7 @@ function PhaseActions(props: PhaseActionsProps) {
                   actorId: player.id,
                   combatType: 'HeroVsHero',
                   targetPlayerId: rivalHeroHere.id,
-                  targetHeroId: samePos(rivalHeroHere.hero.position, hero.position) ? rivalHeroHere.hero.id : rivalHeroHere.secondHero!.id,
+                  targetHeroId: rivalHeroHere.hero.id,
                   isBackstab: true,
                 })
               }
@@ -891,7 +891,7 @@ function ArmyPanel({
                 className="mt-0.5 accent-hx-blood"
               />
               <span>
-                🗡️ <strong>{originHero.isSecondHero ? 'Second hero' : 'Hero'} joins the attack</strong> — lends an extra die to the fight.
+                🗡️ <strong>Hero joins the attack</strong> — lends an extra die to the fight.
                 Win it and the army lands a free extra kill; lose it and the hero eats real HP damage instead. If that drops them to 0
                 <em> here</em>, it&rsquo;s permanent: a fresh level-1 hero replaces them with none of the fallen one&rsquo;s gear, XP, or
                 levels — far harsher than an ordinary monster fight&rsquo;s downed-and-retreat.
@@ -1027,13 +1027,8 @@ function samePos(a: HexCoord, b: HexCoord) {
   return a.q === b.q && a.r === b.r;
 }
 
-/** [DEFAULT — hero battle participation] Which of this player's heroes (if any) is physically
- *  standing on `coord` — primary checked first, then second, same precedence the pre-existing
- *  rivalHeroHere/duel-target lookup above already uses for "which of a player's (possibly two)
- *  heroes is here." At most one is ever returned since MoveSoldiersAction.heroJoins only takes a
- *  single heroId. */
+/** [DEFAULT — hero battle participation] Whether this player's hero is physically standing on
+ *  `coord` — used to decide whether the "hero joins the attack" toggle applies to a march. */
 function heroAtCoord(player: Player, coord: HexCoord): Player['hero'] | null {
-  if (samePos(player.hero.position, coord)) return player.hero;
-  if (player.secondHero && samePos(player.secondHero.position, coord)) return player.secondHero;
-  return null;
+  return samePos(player.hero.position, coord) ? player.hero : null;
 }

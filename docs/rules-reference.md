@@ -1058,9 +1058,8 @@ read a level off of here.
 
 **HP reaching 0 this way is PERMANENT — not the §6.1a "downed" rule.** A hero whose HP is driven to 0
 or below by losing its own Army vs Territory pairing does not retreat and heal. It is replaced
-outright, in the same hero slot (primary or second hero), by a completely fresh Level 1 hero
-(`freshHeroState` in `engine/selectors.ts` — the same factory that builds every hero's starting body,
-including at spawn and at the Town-tier-4 second-hero unlock, §7.3) — Level, XP, gear, equipped Loot,
+outright by a completely fresh Level 1 hero (`freshHeroState` in `engine/selectors.ts` — the same
+factory that builds every hero's starting body, including at spawn) — Level, XP, gear, equipped Loot,
 carried Loot, and active curses are all gone, exactly as if this were a brand-new character. What the
 fresh hero DOES still carry is whatever the *player* has already permanently invested, independent of
 any one hero's body: the player's class bonus (a Farmer's max-HP bonus, a Warrior's starting weapon
@@ -1107,9 +1106,7 @@ resolveDoorCardIfNewTile(hero, destination):
 three brand-new hexes to reach a fourth doesn't trigger three draws and then a fourth — only arriving
 and *stopping* somewhere new opens a door. This matches the physical game's framing (you open the
 door of the room you walk into, not every room you glance through on the way) and keeps a single Move
-Hero action, however long, to at most one Door draw. Because `visitedTiles` is tracked **per hero**,
-not per player, a second hero unlocked at Town tier 4 (§7.3) explores independently and can trigger
-its own Door draws on hexes the first hero has already cleared.
+Hero action, however long, to at most one Door draw.
 
 #### One combined deck, not two
 
@@ -1271,7 +1268,7 @@ for the round each building unlocks.
 | River | Dock | Unlocks boat movement; not before Round 3 §; produces no resource — see §6.3b for what a River tile is actually worth ¤ | 2 Wood + 1 Stone |
 | Any owned tile | Watchtower | +1 to each defending die (cap 6) in territory combat, for whoever is holding the tile (§6.3) | 2 Stone + 2 Ore |
 | Plains only ‡ | Barracks | **Unlocks Soldier recruitment, and nothing else.** Recruits `max(1, floor(ownedTiles / 3))` Soldiers/round into its own tile, capped at 9 and only while the current army's upkeep is affordable (§6.3); move them out with Deploy Soldiers (interior) or Move Soldiers (the frontier). Confers **no** attack privilege and no adjacency rule ¶ | 3 Wood + 2 Ore + 5 Food ‡ |
-| Starting tile only | Capital upgrade (the Town) | Increases hero max HP every tier; tier 4 of 5 unlocks a second hero (requires ≥10 VP) — tier 1 is free, granted at spawn; see §7.3 | Cost scales with tier |
+| Starting tile only | Capital upgrade (the Town) | Increases hero max HP every tier — tier 1 is free, granted at spawn; see §7.3 | Cost scales with tier |
 
 **Roads** are not in this table because they are not buildings — they sit on a tile *edge*, not on a
 tile, cost a flat 1 Wood, and are not a Phase-5 action. See §7.7.
@@ -1405,15 +1402,14 @@ attempting a sixth tier is rejected with "Town is already at max tier (5)".
 | 1 | — *(free; already built at spawn, never actually paid for)* | +2 hero Max HP |
 | 2 | 3 Wood + 3 Stone + 3 Food | +3 hero Max HP |
 | 3 | 4 Stone + 3 Ore + 4 Food | +3 hero Max HP |
-| 4 | 5 Ore + 5 Gold | +3 hero Max HP; **unlocks a second hero** (requires owner has ≥10 VP) |
+| 4 | 5 Ore + 5 Gold | +3 hero Max HP |
 | 5 | 8 Gold + 6 Ore + 6 Stone | +5 hero Max HP |
 
-**[DEFAULT — territory rework]** The table was a 2-tier ladder, both tiers purchased, with the
-second-hero unlock at the old tier 2. It's now **5 tiers**, with **tier 1 granted free at spawn**
-rather than bought, and the second-hero unlock moved to the new **tier 4** (still gated behind ≥10 VP,
-unchanged). Stretching it to 5 tiers keeps the Town a real, ongoing investment choice deep into a
-game that, at the current VP win threshold (§11: 120), routinely runs well past 20 rounds — a 2-tier
-ladder would have been fully spent long before the game itself was.
+**[DEFAULT — territory rework]** The table was a 2-tier ladder, both tiers purchased. It's now
+**5 tiers**, with **tier 1 granted free at spawn** rather than bought. Stretching it to 5 tiers keeps
+the Town a real, ongoing investment choice deep into a game that, at the current VP win threshold
+(§11: 120), routinely runs well past 20 rounds — a 2-tier ladder would have been fully spent long
+before the game itself was.
 
 Every tier's `heroMaxHpBonus` applies **the moment it's bought**, immediately raising both the hero's
 `maxHp` and current `hp` by that amount (§8.2's "level up heals to new max" rule does NOT apply here —
@@ -1421,13 +1417,6 @@ a Town upgrade is not a level-up, and the hero is topped up by the bonus amount,
 Tier 1's +2 applies automatically at spawn, on top of the base 10 Max HP from §1.4 and before any
 class bonus (e.g. Farmer's own +2) — so in practice **every** hero's true starting Max HP is 12, not
 the bare 10 that §1.4 states as the pre-Town, pre-class baseline.
-
-**The second hero**, once tier 4 unlocks it, spawns at the player's Capital tile with the *plain*
-baseline stat line from §1.4 (Level 1, 10 Max HP, Attack 1, 0 XP) — it does **not** retroactively pick
-up the class's starting bonus or any of the Town tiers' accumulated HP bonuses the first hero has
-already banked; those applied once, at first-hero spawn / at the moment each tier was bought, and
-are not re-granted. Like the first hero, the second hero's own `visitedTiles` starts pre-seeded with
-the Capital tile, so spawning there does not itself trigger a Door draw (§6.4).
 
 ### 7.4 Hero Level-Up & Equip
 When a hero's accumulated XP meets the threshold for its next level (§8.1), the level-up is "earned" but not applied until the player spends a Phase 5 action and pays **2 Food** (subject to the Mage discount, §7.2) to apply it, drawn from the wallet only — see §7.6. **[DEFAULT — balance rework pass 2: was 1 Food + 1 Gold]** Equipping a Loot card places it into one of the hero's 3 gear slots (Weapon / Armor / Trinket); a slot's prior occupant returns to unequipped inventory (no combat bonus while unequipped). **[DEFAULT: slot count]**

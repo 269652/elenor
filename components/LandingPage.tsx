@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { HotseatApp } from '@/components/HotseatApp';
 import { P2PApp } from '@/components/p2p/P2PApp';
 import { createGameAction, joinGameAction } from '@/actions/game-actions';
-import { BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
+import { BTN_ARCANE, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 import { SCREEN_ART } from '@/components/screenArt';
 
 type Tab = 'menu' | 'local' | 'online' | 'p2p';
@@ -68,7 +68,7 @@ export function LandingPage({ supabaseConfigured }: { supabaseConfigured: boolea
             >
               🪑 Play Local (Hotseat)
             </button>
-            <button type="button" onClick={() => setTab('p2p')} className={BTN_SECONDARY}>
+            <button type="button" onClick={() => setTab('p2p')} className={BTN_ARCANE}>
               🔗 Play P2P (WebRTC)
             </button>
             <button type="button" disabled title="Coming soon" className={BTN_GHOST}>

@@ -77,7 +77,6 @@ import {
   checkMovePath,
   checkWinConditions,
   classDefFor,
-  computeAllVictoryPoints,
   effectiveTileType,
   findPlayer,
   freshHeroState,
@@ -247,11 +246,9 @@ function respawnHeroFromDeath(draft: GameState, player: Player, hero: HeroState)
     classId: player.classId,
     capitalTier: player.capitalTier,
     capitalTile: player.capitalTile,
-    isSecondHero: hero.isSecondHero,
     canBoat: playerHasDock(draft, player.id),
   });
-  if (hero.isSecondHero) player.secondHero = fresh;
-  else player.hero = fresh;
+  player.hero = fresh;
   pushEvent(draft, player.id, 'HeroDied', { heroId: hero.id, respawnedAsId: fresh.id, cause: 'ArmyVsTerritory' });
 }
 
@@ -267,8 +264,8 @@ function findPlayerMut(draft: GameState, playerId: PlayerId): Player {
   return p;
 }
 
-function heroMut(player: Player, heroId?: string): HeroState {
-  if (heroId && player.secondHero && player.secondHero.id === heroId) return player.secondHero;
+// See selectors.ts's resolveHero for why heroId stays as an accepted-but-ignored param.
+function heroMut(player: Player, _heroId?: string): HeroState {
   return player.hero;
 }
 
@@ -305,7 +302,6 @@ export function resolveProductionForNewTurn(state: GameState, playerId: PlayerId
     // "Once per round" trackers reset once per round; since a player takes exactly one turn
     // per round, resetting at the start of their own turn is equivalent.
     player.hero.hasHuntedThisRound = false;
-    if (player.secondHero) player.secondHero.hasHuntedThisRound = false;
     player.hasStolenThisRound = false;
     player.foragedTilesThisRound = [];
 
@@ -1026,9 +1022,6 @@ export function applyBuild(state: GameState, action: BuildBuildingAction): GameS
     if (!nextTier) throw new IllegalActionError('Town is already at max tier (5)');
     const cost = isMage ? applyMageDiscount(nextTier.cost) : nextTier.cost;
     if (!combinedAfford(player, hero, action.coord, cost)) throw new IllegalActionError('Cannot afford this Town tier');
-    if ('unlocksSecondHero' in nextTier && nextTier.unlocksSecondHero && computeAllVictoryPoints(state, player) < nextTier.requiresVp) {
-      throw new IllegalActionError(`Tier ${nextTier.tier} requires >= ${nextTier.requiresVp} VP`);
-    }
     return produce(state, (draft) => {
       const p = findPlayerMut(draft, action.actorId);
       const h = heroMut(p, action.heroId);
@@ -1040,25 +1033,8 @@ export function applyBuild(state: GameState, action: BuildBuildingAction): GameS
       const draftCapitalTile = findTileMut(draft, action.coord);
       if (draftCapitalTile.building) draftCapitalTile.building.tier = p.capitalTier;
       if ('heroMaxHpBonus' in nextTier) {
-        // Applies to BOTH heroes — Town fortification protects the whole household, not just
-        // whichever hero happened to exist when the tier was bought.
         p.hero.maxHp += nextTier.heroMaxHpBonus;
         p.hero.hp += nextTier.heroMaxHpBonus;
-        if (p.secondHero) {
-          p.secondHero.maxHp += nextTier.heroMaxHpBonus;
-          p.secondHero.hp += nextTier.heroMaxHpBonus;
-        }
-      }
-      if ('unlocksSecondHero' in nextTier && nextTier.unlocksSecondHero) {
-        p.secondHero = freshHeroState({
-          id: `${p.id}-hero-2`,
-          ownerId: p.id,
-          classId: p.classId,
-          capitalTier: p.capitalTier,
-          capitalTile: p.capitalTile,
-          isSecondHero: true,
-          canBoat: playerHasDock(draft, p.id),
-        });
       }
       draft.hasBuiltThisTurn = true;
       pushEvent(draft, action.actorId, 'CapitalUpgraded', { tier: p.capitalTier });
@@ -1280,14 +1256,9 @@ export function applyMoveSoldiers(state: GameState, action: MoveSoldiersAction):
     const defenderPlayer = defenderId ? findPlayerMut(draft, defenderId) : null;
     let defenderHeroRef: HeroState | null = null;
     let defenderHeroDie: HeroBattleDie | null = null;
-    if (defenderPlayer) {
-      const candidate = [defenderPlayer.hero, defenderPlayer.secondHero].find(
-        (h): h is HeroState => !!h && hexKey(h.position) === hexKey(action.toCoord)
-      );
-      if (candidate) {
-        defenderHeroRef = candidate;
-        defenderHeroDie = { heroId: candidate.id, roll: rollHeroAttack(candidate, defenderPlayer, rng) };
-      }
+    if (defenderPlayer && hexKey(defenderPlayer.hero.position) === hexKey(action.toCoord)) {
+      defenderHeroRef = defenderPlayer.hero;
+      defenderHeroDie = { heroId: defenderPlayer.hero.id, roll: rollHeroAttack(defenderPlayer.hero, defenderPlayer, rng) };
     }
 
     const outcome = resolveArmyVsTerritory(action.count, defendingUnits, hasWatchtower, rng, attackerHeroDie, defenderHeroDie);
@@ -1545,7 +1516,7 @@ function requireNoPendingDoorMonster(state: GameState, actorId: PlayerId) {
   const pending = state.pendingDoorMonster;
   if (!pending) return;
   const player = findPlayer(state, actorId);
-  const belongsToActor = player.hero.id === pending.heroId || player.secondHero?.id === pending.heroId;
+  const belongsToActor = player.hero.id === pending.heroId;
   if (belongsToActor) {
     throw new IllegalActionError('A Door monster is still standing in your way — fight it (Phase 4) before ending your turn');
   }

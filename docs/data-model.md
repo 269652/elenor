@@ -213,7 +213,7 @@ export type BuildingType =
                     // rework; was a flat +3), throttled by current-army upkeep affordability
                     // (pass 2). Grants NO attack privilege and no adjacency rule.
   | 'CowStable'     // Plains, +1 Meat/turn at tier 1, 4 upgrade tiers to +5 — balance rework
-  | 'Capital';      // starting tile only — hero max HP up, second hero at high VP milestone
+  | 'Capital';      // starting tile only — hero max HP up per tier
 
 /** Runtime instance sitting on a specific tile. */
 export interface Building {
@@ -473,9 +473,7 @@ export interface HeroState {
   /** **Munchkin exploration layer.** Every `HexKey` this hero has ever stood on, seeded at spawn
    *  with its own starting tile (spawning there does not itself count as a fresh arrival). The
    *  FIRST time it grows to include a given key — the hero's move ending somewhere new — triggers
-   *  a Door card draw (`resolveDoorCardIfNewTile` in `engine/reducers.ts`; Rules Reference §6.4).
-   *  Kept **per-hero, not per-player**, so a second hero unlocked at Town tier 4 (§7.3) explores
-   *  independently rather than inheriting the first hero's discoveries. */
+   *  a Door card draw (`resolveDoorCardIfNewTile` in `engine/reducers.ts`; Rules Reference §6.4). */
   visitedTiles: HexKey[];
 }
 ```
@@ -498,11 +496,9 @@ export interface Player {
   /** The Town's current tier, 1-5. **Territory rework: 5 tiers, was 2.** Starts at `1` for every
    *  player — tier 1 is granted free at spawn, not purchased (`setup.ts`'s `buildStartingPlayer`) —
    *  and climbs one tier per `'Build'` action with `buildingType: 'Capital'`, indexing
-   *  `CAPITAL_TIERS[capitalTier]` for the next tier's cost/effect. Tier 4 unlocks `secondHero`
-   *  (requires >= 10 VP). Rules Reference §7.3. */
+   *  `CAPITAL_TIERS[capitalTier]` for the next tier's cost/effect. Rules Reference §7.3. */
   capitalTier: number;
   hero: HeroState;
-  secondHero: HeroState | null;
   victoryPoints: number;
   isEliminated: boolean;
   /** [give, receive] — default [4,1]; [2,1] via Trade Post; [3,1] via Merchant class. */
@@ -696,7 +692,8 @@ resolves automatically when a turn's `AdvancePhaseAction` enters that phase, app
 ```typescript
 interface BaseAction {
   actorId: PlayerId;
-  /** Disambiguates which hero acts once a Capital unlocks a second hero. */
+  /** Accepted but currently always resolves to the player's one hero — see selectors.ts's
+   *  resolveHero. A holdover from a removed second-hero feature; harmless to keep. */
   heroId?: string;
 }
 
@@ -846,9 +843,9 @@ export interface DeploySoldiersAction extends BaseAction {
  *  if that hero is physically standing on `fromCoord` when this action is submitted, or the action is
  *  rejected outright. Ignored on an uncontested move (nothing to fight). A DEFENDING hero needs
  *  neither field: it joins automatically just by standing on `toCoord` when the march lands, checked
- *  directly against `player.hero.position`/`player.secondHero.position`. Either way this action never
- *  writes the hero's own `position` — winning, losing, or never getting a pairing all leave it exactly
- *  where it was; only `MoveHeroAction` (Rules Reference §4) ever relocates a hero.
+ *  directly against `player.hero.position`. Either way this action never writes the hero's own
+ *  `position` — winning, losing, or never getting a pairing all leave it exactly where it was; only
+ *  `MoveHeroAction` (Rules Reference §4) ever relocates a hero.
  *
  *  `resolveArmyVsTerritory` (`engine/combat.ts`) folds the joining hero's roll (`rollHeroAttack` — the
  *  same formula every other Fight-phase action uses, Rules Reference §6.1) into that side's sorted

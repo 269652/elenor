@@ -27,7 +27,6 @@ import {
   buildingDefFor,
   checkMovePath,
   classDefFor,
-  computeAllVictoryPoints,
   edgeKey,
   effectiveTileType,
   gearBonus,
@@ -648,7 +647,7 @@ function scoreDestination(
 function findRivalHeroAt(state: GameState, playerId: PlayerId, coord: HexCoord): Player | null {
   for (const p of state.players) {
     if (p.id === playerId) continue;
-    if (samePos(p.hero.position, coord) || (p.secondHero && samePos(p.secondHero.position, coord))) return p;
+    if (samePos(p.hero.position, coord)) return p;
   }
   return null;
 }
@@ -753,7 +752,7 @@ function decideFight(state: GameState, player: Player): Action {
         actorId: player.id,
         combatType: 'HeroVsHero',
         targetPlayerId: rival.id,
-        targetHeroId: samePos(rival.hero.position, hero.position) ? rival.hero.id : rival.secondHero!.id,
+        targetHeroId: rival.hero.id,
         isBackstab: true,
       };
     }
@@ -1190,8 +1189,7 @@ function findBestBuildCandidate(
   const nextTier = CAPITAL_TIERS[player.capitalTier];
   if (nextTier) {
     const cost = isMage ? applyMageDiscount(nextTier.cost) : nextTier.cost;
-    const vpOk = !('unlocksSecondHero' in nextTier && nextTier.unlocksSecondHero) || computeAllVictoryPoints(state, player) >= nextTier.requiresVp;
-    if (vpOk && canAffordCombined(player, player.hero, player.capitalTile, cost) &&
+    if (canAffordCombined(player, player.hero, player.capitalTile, cost) &&
         (!earmark || respectsBarracksEarmark(player, player.capitalTile, cost, earmark))) {
       best = { action: { type: 'Build', actorId: player.id, buildingType: 'Capital', coord: player.capitalTile }, score: 5 };
     }
@@ -1383,7 +1381,7 @@ function considerTerritoryMarch(state: GameState, player: Player): Action | null
 //      engine/selectors.ts's resolveHero/pendingDoorMonster for how the rest of this file already
 //      reads that state (decideFight's `pending.heroId === hero.id` check is the direct precedent).
 //   2. HP floor, scaled by how bad losing this hero specifically would be right now (see
-//      HERO_JOIN_MIN_HP_FRACTION_SOLO_EARLY).
+//      HERO_JOIN_MIN_HP_FRACTION_EARLY_GAME).
 //   3. The pairing itself has to be a good trade, not a coin flip — heroPairWinProbability
 //      (combatPrediction.ts) estimates P(the hero's own die beats a plain defending troop's die);
 //      HERO_JOIN_MIN_WIN_PROBABILITY reuses the exact 0.55 bar this same file already applies to
@@ -1399,15 +1397,15 @@ function considerTerritoryMarch(state: GameState, player: Player): Action | null
  *  already thin. */
 const HERO_JOIN_MIN_HP_FRACTION = 0.5;
 
-/** Stricter HP floor applied when losing this hero would be WORST: it is the player's only hero
- *  (no secondHero to keep the empire running) AND the player hasn't banked a single Town-tier
- *  upgrade yet (capitalTier <= 1, i.e. still the literal opening game — no cushion of buildings,
- *  economy, or a second hero to fall back on). Scaling the floor rather than refusing outright:
- *  HERO_BATTLE_XP_ON_WIN is real, if modest, progress toward the very upgrades that would relax
- *  this later, and a hero already at 0.9+ HP joining a well-favored (>= HERO_JOIN_MIN_WIN_PROBABILITY)
- *  fight is still a good bet even this early — a blanket ban would leave a solo early hero unable to
- *  level up from anything but Door-card monster fights. */
-const HERO_JOIN_MIN_HP_FRACTION_SOLO_EARLY = 0.75;
+/** Stricter HP floor applied when losing this hero would be WORST: the player hasn't banked a
+ *  single Town-tier upgrade yet (capitalTier <= 1, i.e. still the literal opening game — no
+ *  cushion of buildings or economy to fall back on, and the player's only hero). Scaling the
+ *  floor rather than refusing outright: HERO_BATTLE_XP_ON_WIN is real, if modest, progress toward
+ *  the very upgrades that would relax this later, and a hero already at 0.9+ HP joining a
+ *  well-favored (>= HERO_JOIN_MIN_WIN_PROBABILITY) fight is still a good bet even this early — a
+ *  blanket ban would leave an opening-game hero unable to level up from anything but Door-card
+ *  monster fights. */
+const HERO_JOIN_MIN_HP_FRACTION_EARLY_GAME = 0.75;
 
 /** Minimum estimated probability (heroPairWinProbability) that the hero wins their own §6.3
  *  pairing before it's worth risking them. Matches the 0.55 bar this same file already uses for
@@ -1427,8 +1425,8 @@ function heroWouldJoinIfPresent(state: GameState, player: Player, best: Territor
   if (hero.hp <= 0) return false; // dead/not-yet-respawned — can't volunteer
   if (state.pendingDoorMonster && state.pendingDoorMonster.heroId === hero.id) return false; // mid a mandatory Door fight
 
-  const soloEarly = !player.secondHero && player.capitalTier <= 1;
-  const minHpFraction = soloEarly ? HERO_JOIN_MIN_HP_FRACTION_SOLO_EARLY : HERO_JOIN_MIN_HP_FRACTION;
+  const earlyGame = player.capitalTier <= 1;
+  const minHpFraction = earlyGame ? HERO_JOIN_MIN_HP_FRACTION_EARLY_GAME : HERO_JOIN_MIN_HP_FRACTION;
   if (hero.hp / hero.maxHp < minHpFraction) return false;
 
   const targetTile = tileAt(state, best.targetCoord);

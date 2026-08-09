@@ -97,7 +97,7 @@ type Reveal =
   | { deck: 'treasure'; card: LootCard };
 
 function heroesOf(player: Player): HeroState[] {
-  return player.secondHero ? [player.hero, player.secondHero] : [player.hero];
+  return [player.hero];
 }
 
 // ── Pending mandatory Door-monster fight ────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ function heroesOf(player: Player): HeroState[] {
 export function isDoorMonsterPendingFor(state: GameState, player: Player): boolean {
   const pending = state.pendingDoorMonster;
   if (!pending) return false;
-  return pending.heroId === player.hero.id || pending.heroId === player.secondHero?.id;
+  return pending.heroId === player.hero.id;
 }
 
 /** [DEFAULT — Munchkin exploration layer, UI] The mandatory-encounter callout for the Fight

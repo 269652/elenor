@@ -16,7 +16,7 @@ import { decideAction } from '../decideAction';
  * militia parked on p1's Capital, an adjacent tile owned by p2 with a small (beatable) garrison
  * — mirroring territoryMinimax.test.ts's own "5 vs 1, undefended" case, which is already proven
  * to return a non-null, favorable attack. What varies per test is only the hero's own state
- * (position, HP, capitalTier/secondHero, stats, pendingDoorMonster) — i.e. exactly the inputs
+ * (position, HP, capitalTier, stats, pendingDoorMonster) — i.e. exactly the inputs
  * heroShouldJoinMarch's four gates read.
  */
 
@@ -75,7 +75,7 @@ function makeMarchScenario(opts: MarchScenarioOptions = {}) {
   };
   if (contested) p2.ownedTiles.push(targetCoord);
 
-  p1.capitalTier = opts.capitalTier ?? 2; // avoid the stricter solo-early HP floor by default
+  p1.capitalTier = opts.capitalTier ?? 2; // avoid the stricter early-game HP floor by default
   p1.hero.level = opts.heroLevel ?? 3;
   p1.hero.attack = opts.heroAttack ?? 2;
   p1.hero.maxHp = opts.heroMaxHp ?? 20;
@@ -111,14 +111,14 @@ describe('heroShouldJoinMarch (via decideAction): gates that must block joining'
     expect(action.heroJoins).toBeFalsy();
   });
 
-  it('does not join when HP is below the tightened solo-early floor (0.75), even though it clears the normal 0.5 floor', () => {
-    // capitalTier 1 (the setup default), no secondHero: the stricter early-game floor applies.
+  it('does not join when HP is below the tightened early-game floor (0.75), even though it clears the normal 0.5 floor', () => {
+    // capitalTier 1 (the setup default): the stricter early-game floor applies.
     const { state } = makeMarchScenario({ capitalTier: 1, heroMaxHp: 20, heroHp: 12 }); // 0.6 fraction
     const action = expectMoveSoldiers(decideAction(state, 'p1'));
     expect(action.heroJoins).toBeFalsy();
   });
 
-  it('the same 0.6 HP fraction DOES clear the ordinary 0.5 floor once past the solo-early window (capitalTier > 1)', () => {
+  it('the same 0.6 HP fraction DOES clear the ordinary 0.5 floor once past the early-game window (capitalTier > 1)', () => {
     const { state, heroId } = makeMarchScenario({ capitalTier: 2, heroMaxHp: 20, heroHp: 12 }); // same 0.6 fraction
     const action = expectMoveSoldiers(decideAction(state, 'p1'));
     expect(action.heroJoins).toBe(true);

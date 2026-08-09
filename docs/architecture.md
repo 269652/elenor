@@ -35,7 +35,7 @@ interface GameState {
   currentPlayerId: PlayerId;
   currentPhase: Phase;
   map: Record<HexKey, Tile>;        // key: "q,r" axial coord
-  players: Player[];                // each Player embeds its own `hero` (and `secondHero`)
+  players: Player[];                // each Player embeds its own `hero`
   tileDeck: TileDeckState;
   monsterDeck: MonsterDeckState;
   lootDeck: LootDeckState;
@@ -47,7 +47,7 @@ interface GameState {
 
 interface BaseAction {
   actorId: PlayerId;
-  heroId?: string; // disambiguates which hero acts once a Capital unlocks a second hero
+  heroId?: string; // accepted but currently always resolves to the player's one hero — see selectors.ts's resolveHero
 }
 
 type Action =

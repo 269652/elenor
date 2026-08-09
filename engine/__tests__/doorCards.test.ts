@@ -130,7 +130,6 @@ const TEST_BADSTUFF: BadStuffCard = { id: 'test-badstuff', name: 'Test Mishap', 
 const SPAWN: HexCoord = { q: 0, r: 0 };
 const NEW_TILE: HexCoord = { q: 1, r: 0 }; // adjacent to SPAWN
 const FAR_NEW_TILE: HexCoord = { q: 2, r: 0 }; // adjacent to NEW_TILE, 2 hexes from SPAWN
-const HERO2_SPOT: HexCoord = { q: 9, r: 9 }; // unrelated to the SPAWN/NEW_TILE cluster
 
 /** Single player, single hero, standing at SPAWN with SPAWN already visited — the common case
  *  for every Phase-2 MoveHero test in groups 1-3 and 7. */
@@ -457,71 +456,7 @@ describe('Fight: Door-sourced HeroVsMonster is a distinct source from a Ruins De
   });
 });
 
-// ── 6. Two heroes (post Town-tier-4) ────────────────────────────────────────────────────────
-
-describe('Two heroes: independent visitedTiles and no pendingDoorMonster cross-contamination', () => {
-  function twoHeroState(opts: { doorDeck?: DoorDeckState; monsterDeck?: GameState['monsterDeck'] } = {}) {
-    const hero1 = makeHero({ id: 'hero-1', ownerId: 'p1', position: SPAWN, visitedTiles: [hexKey(SPAWN)] });
-    const hero2 = makeHero({ id: 'hero-2', ownerId: 'p1', isSecondHero: true, position: HERO2_SPOT, visitedTiles: [hexKey(HERO2_SPOT)] });
-    const p1 = makePlayer({ id: 'p1', capitalTile: SPAWN, ownedTiles: [SPAWN], hero: hero1, secondHero: hero2 });
-    const tiles: Tile[] = [
-      makeTile({ coord: SPAWN, type: 'Plains', ownerId: 'p1' }),
-      makeTile({ coord: NEW_TILE, type: 'Forest', ownerId: null }),
-      makeTile({ coord: HERO2_SPOT, type: 'Ruins', ownerId: null, monsterDenCardId: SOME_MONSTER.id }),
-    ];
-    return fixtureState([p1], tiles, {
-      currentPhase: Phase.MoveHero,
-      doorDeck: opts.doorDeck ?? { drawPile: [], discardPile: [] },
-      monsterDeck: opts.monsterDeck ?? { drawPile: [], discardPile: [] },
-      lootDeck: lootDeckWith(lootRarityForMonsterLevel(SOME_MONSTER.level), [
-        { ...TEST_LOOT_COMMON, rarity: lootRarityForMonsterLevel(SOME_MONSTER.level) },
-      ]),
-    });
-  }
-
-  it("hero 1 visiting a new tile does not mark it visited for hero 2", () => {
-    const doorDeck: DoorDeckState = { drawPile: [utilityDoorCard('Nothing')], discardPile: [] };
-    const state = twoHeroState({ doorDeck });
-    const after = applyAction(state, { type: 'MoveHero', actorId: 'p1', heroId: 'hero-1', path: [NEW_TILE] });
-
-    const p1 = playerIn(after, 'p1');
-    expect(p1.hero.visitedTiles).toContain(hexKey(NEW_TILE));
-    expect(p1.secondHero!.visitedTiles).toEqual([hexKey(HERO2_SPOT)]); // untouched
-    expect(p1.secondHero!.visitedTiles).not.toContain(hexKey(NEW_TILE));
-  });
-
-  it("a pendingDoorMonster for hero 1 does not block hero 2's Fight action, and hero 2 fighting does not clear it", () => {
-    const withPending: GameState = {
-      ...twoHeroState(),
-      pendingDoorMonster: { heroId: 'hero-1', coord: SPAWN, monsterCardId: APEX_MONSTER.id },
-      currentPhase: Phase.Fight,
-    };
-    // Boost hero 2 so its Ruins fight resolves as a clean win, independent of the die roll.
-    const boosted: GameState = {
-      ...withPending,
-      players: withPending.players.map((p) => (p.id === 'p1' ? { ...p, secondHero: { ...p.secondHero!, level: 3, attack: 50 } } : p)),
-    };
-
-    const after = applyAction(boosted, {
-      type: 'Fight',
-      actorId: 'p1',
-      heroId: 'hero-2',
-      combatType: 'HeroVsMonster',
-      coord: HERO2_SPOT,
-      monsterCardId: SOME_MONSTER.id,
-    });
-
-    // Hero 2's Ruins Den fight went through...
-    expect(after.hasFoughtThisTurn).toBe(true);
-    expect(after.map[hexKey(HERO2_SPOT)].monsterDenCardId).toBeNull(); // cleared on a Ruins win
-    const combat = eventsOfType(after, 'CombatResolved');
-    expect(combat[0].payload).toMatchObject({ source: 'RuinsDen', win: true });
-    // ...and hero 1's still-pending Door monster was neither consumed nor disturbed.
-    expect(after.pendingDoorMonster).toEqual({ heroId: 'hero-1', coord: SPAWN, monsterCardId: APEX_MONSTER.id });
-  });
-});
-
-// ── 7. Deck reshuffle and genuine exhaustion ────────────────────────────────────────────────
+// ── 6. Deck reshuffle and genuine exhaustion ────────────────────────────────────────────────
 
 describe('drawDoor: reshuffle and exhaustion (decks.ts, direct)', () => {
   it('reshuffles the discard pile into the draw pile once the draw pile runs dry', () => {

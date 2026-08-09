@@ -28,7 +28,7 @@ export function HeroPanel({ player, hero, dispatch, canAct }: HeroPanelProps) {
     <div className={clsx(PANEL, 'flex flex-col gap-3')}>
       <div className="flex items-center justify-between gap-2">
         <span className="font-display text-lg font-bold leading-tight" style={{ color: player.color }}>
-          {player.name}&rsquo;s Hero {hero.isSecondHero ? '(2nd)' : ''}
+          {player.name}&rsquo;s Hero
         </span>
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-hx-gold bg-gradient-to-b from-hx-gold-bright to-hx-gold font-display text-xs font-bold text-hx-bg shadow-[0_0_8px_-1px_rgba(217,164,65,0.8)]">
           {hero.level}
@@ -61,7 +61,7 @@ export function HeroPanel({ player, hero, dispatch, canAct }: HeroPanelProps) {
             <button
               type="button"
               disabled={!canAct}
-              onClick={() => void dispatch({ type: 'DepositResources', actorId: player.id, heroId: hero.isSecondHero ? hero.id : undefined })}
+              onClick={() => void dispatch({ type: 'DepositResources', actorId: player.id })}
               className={BTN_PILL}
             >
               🏠 Deposit at Capital
@@ -92,7 +92,7 @@ export function HeroPanel({ player, hero, dispatch, canAct }: HeroPanelProps) {
         <button
           type="button"
           disabled={!canAct}
-          onClick={() => void dispatch({ type: 'LevelUpHero', actorId: player.id, heroId: hero.isSecondHero ? hero.id : undefined })}
+          onClick={() => void dispatch({ type: 'LevelUpHero', actorId: player.id })}
           className={clsx(BTN_PRIMARY, 'text-center')}
         >
           ⭐ Apply Level Up (costs 1 Food + 1 Gold)
@@ -134,8 +134,8 @@ export function HeroPanel({ player, hero, dispatch, canAct }: HeroPanelProps) {
                   onClick={() =>
                     void dispatch(
                       equipped
-                        ? { type: 'UnequipLoot', actorId: player.id, lootCardId: loot.id, heroId: hero.isSecondHero ? hero.id : undefined }
-                        : { type: 'EquipLoot', actorId: player.id, lootCardId: loot.id, heroId: hero.isSecondHero ? hero.id : undefined }
+                        ? { type: 'UnequipLoot', actorId: player.id, lootCardId: loot.id }
+                        : { type: 'EquipLoot', actorId: player.id, lootCardId: loot.id }
                     )
                   }
                   className={BTN_PILL}

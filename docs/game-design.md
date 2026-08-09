@@ -133,8 +133,7 @@ holding it), cost 2 Stone + 2 Ore.
 
 **Starting-tile only:** the **Town** — every player's starting tile carries tier 1 for free from turn
 one, and four further tiers can be bought over the course of the game (cost scaling with tier), each
-adding more hero max HP. The fourth tier unlocks a second hero, once the player has banked at least
-10 VP.
+adding more hero max HP.
 
 **Not a building at all: roads.** A road costs 1 Wood and sits on the *edge* between two adjacent
 hexes rather than on a hex, so it doesn't occupy a tile's one building slot and doesn't compete with

@@ -26,6 +26,13 @@ export const BTN_DANGER =
 export const BTN_GHOST =
   `rounded-sm border border-hx-border bg-transparent px-3 py-2 text-xs text-hx-ink-faint transition hover:border-hx-border-strong hover:text-hx-ink disabled:cursor-not-allowed disabled:opacity-40 ${LIFT}`;
 
+/** Same size/weight as BTN_PRIMARY (a real, full-height CTA, not an afterthought) but in the
+ *  arcane purple accent instead of gold — for a second first-class option that shouldn't compete
+ *  with or be mistaken for the primary one. Translucent rather than solid-filled, so it still
+ *  reads as visually subordinate to BTN_PRIMARY at a glance. */
+export const BTN_ARCANE =
+  `rounded-sm border border-hx-arcane bg-hx-arcane/15 px-3 py-2 text-sm font-semibold text-hx-ink shadow-[0_0_14px_-4px_rgba(140,108,208,0.6)] transition hover:border-hx-arcane hover:bg-hx-arcane/25 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none ${LIFT}`;
+
 /** A small pill-style variant of BTN_SECONDARY — for compact inline actions (equip/unequip,
  *  deposit) inside a denser layout like HeroPanel's loot list. */
 export const BTN_PILL =

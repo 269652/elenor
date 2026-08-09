@@ -31,9 +31,13 @@ export function findPlayer(state: GameState, playerId: PlayerId): Player {
   return player;
 }
 
-/** Resolves which of a player's heroes an action targets — defaults to the primary hero. */
-export function resolveHero(player: Player, heroId?: string): HeroState {
-  if (heroId && player.secondHero && player.secondHero.id === heroId) return player.secondHero;
+/** Resolves which hero an action targets. Every player has exactly one hero — the optional
+ *  heroId param survives on BaseAction and every call site for now (it costs nothing to accept
+ *  and ignore), a holdover from when a Town-tier-4 unlock gave a player a second hero; that
+ *  feature was removed (it never worked properly — see git history) rather than fixed, and
+ *  nothing about heroId itself was broken, so there was no reason to also tear out every call
+ *  site that still passes one. */
+export function resolveHero(player: Player, _heroId?: string): HeroState {
   return player.hero;
 }
 
@@ -58,17 +62,15 @@ export function playerHasDock(state: GameState, playerId: PlayerId): boolean {
  *  investments the player already paid for, not "the last hero's skills," so they persist across
  *  a hero's death; everything individually earned (level, XP, gear, loot, curses) does not.
  *
- *  Single source of truth for hero creation, used by: setup.ts (turn-zero spawn), the Town-tier-4
- *  second-hero unlock, and permadeath respawn (both in reducers.ts's applyBuild/applyMoveSoldiers)
- *  — the last two had drifted from setup.ts before this existed, hardcoding hp:10/attack:1 with
- *  none of the above bonuses applied. */
+ *  Single source of truth for hero creation, used by setup.ts (turn-zero spawn) and permadeath
+ *  respawn (reducers.ts's applyMoveSoldiers) — the latter had drifted from setup.ts before this
+ *  existed, hardcoding hp:10/attack:1 with none of the above bonuses applied. */
 export function freshHeroState(params: {
   id: string;
   ownerId: PlayerId;
   classId: ClassName;
   capitalTier: number;
   capitalTile: HexCoord;
-  isSecondHero: boolean;
   canBoat?: boolean;
 }): HeroState {
   const bonus = CLASS_DEFINITIONS[params.classId].startingBonus;
@@ -82,7 +84,6 @@ export function freshHeroState(params: {
   return {
     id: params.id,
     ownerId: params.ownerId,
-    isSecondHero: params.isSecondHero,
     level: BASE_HERO_STATS.level,
     hp: maxHp,
     maxHp,
@@ -205,7 +206,7 @@ export function terrainCostToEnter(state: GameState, actor: Player, to: HexCoord
     // their own step-index bookkeeping; this function only says whether entry is possible.
     const isRogue = classDefFor(actor).startingBonus.kind === 'Rogue';
     const rivalHeroHere = state.players.some(
-      (p) => p.id === tile.ownerId && (p.hero.position.q === to.q && p.hero.position.r === to.r || (p.secondHero && p.secondHero.position.q === to.q && p.secondHero.position.r === to.r))
+      (p) => p.id === tile.ownerId && p.hero.position.q === to.q && p.hero.position.r === to.r
     );
     if (!isRogue && !rivalHeroHere) return null;
     return TERRAIN_COST_DEFAULT;
@@ -324,11 +325,9 @@ export function computeVictoryPoints(player: Player): number {
   for (const [levelStr, bonus] of Object.entries(VP_HERO_LEVEL_MILESTONES)) {
     const level = Number(levelStr);
     if (player.hero.level >= level) vp += bonus;
-    if (player.secondHero && player.secondHero.level >= level) vp += bonus;
   }
 
-  const legendaryCount = player.hero.inventory.filter((l) => l.rarity === 'Legendary').length +
-    (player.secondHero?.inventory.filter((l) => l.rarity === 'Legendary').length ?? 0);
+  const legendaryCount = player.hero.inventory.filter((l) => l.rarity === 'Legendary').length;
   vp += legendaryCount * VP_PER_LEGENDARY_LOOT;
 
   return vp;
@@ -378,7 +377,7 @@ export function checkWinConditions(state: GameState): { winnerId: PlayerId; winC
     if (shareWin || remainingOpponentsEliminated(player)) {
       triggered.push({ playerId: player.id, condition: 'Domination', vp });
     }
-    if (pastMinRound && (player.hero.level >= WIN_HERO_LEVEL_THRESHOLD || (player.secondHero && player.secondHero.level >= WIN_HERO_LEVEL_THRESHOLD))) {
+    if (pastMinRound && player.hero.level >= WIN_HERO_LEVEL_THRESHOLD) {
       triggered.push({ playerId: player.id, condition: 'HeroLevelRace', vp });
     }
   }

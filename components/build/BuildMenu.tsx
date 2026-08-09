@@ -7,7 +7,6 @@ import {
   RESOURCE_TYPES,
   applyMageDiscount,
   classDefFor,
-  computeAllVictoryPoints,
   effectiveTileType,
   hexKey,
   maxTierFor,
@@ -121,11 +120,7 @@ export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: Bu
       {isCapitalTile && nextCapitalTier && (
         <button
           type="button"
-          disabled={
-            !canAct ||
-            !canAffordHere(nextCapitalTier.cost) ||
-            ('requiresVp' in nextCapitalTier && computeAllVictoryPoints(state, player) < nextCapitalTier.requiresVp)
-          }
+          disabled={!canAct || !canAffordHere(nextCapitalTier.cost)}
           onClick={() => void dispatch({ type: 'Build', actorId: player.id, buildingType: 'Capital', coord: player.capitalTile })}
           className="flex flex-col gap-1 rounded-sm border border-hx-gold bg-hx-gold px-3 py-2.5 text-left shadow-[0_0_16px_-4px_rgba(217,164,65,0.8)] transition hover:bg-hx-gold-bright disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
         >
@@ -134,9 +129,6 @@ export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: Bu
             <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">Tier {nextCapitalTier.tier}</span>
           </span>
           <span className="text-xs font-medium text-hx-bg/80">{costLabel(isMage ? applyMageDiscount(nextCapitalTier.cost) : nextCapitalTier.cost)}</span>
-          {'requiresVp' in nextCapitalTier && (
-            <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">Requires ≥{nextCapitalTier.requiresVp} VP</span>
-          )}
         </button>
       )}
 

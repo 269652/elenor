@@ -26,7 +26,6 @@ export function makeHero(overrides: Partial<HeroState> = {}): HeroState {
   return {
     id: 'hero-1',
     ownerId: 'player-1',
-    isSecondHero: false,
     level: 1,
     hp: 10,
     maxHp: 10,
@@ -80,7 +79,6 @@ export function makePlayer(overrides: MakePlayerOverrides = {}, classId: ClassNa
     capitalTile,
     capitalTier: 0,
     hero: makeHero({ ownerId: overrides.id ?? 'player-1', position: capitalTile }),
-    secondHero: null,
     victoryPoints: 0,
     isEliminated: false,
     bankTradeRatio: BANK_TRADE_DEFAULT_RATIO,

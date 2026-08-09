@@ -82,11 +82,6 @@ function scoreHero(player: Player): number {
   let s = hero.level * WEIGHTS.heroLevel;
   s += (hero.hp / hero.maxHp) * WEIGHTS.heroHpFraction;
   s += gearBonus(hero) * WEIGHTS.gearBonus;
-  if (player.secondHero) {
-    s += player.secondHero.level * WEIGHTS.heroLevel;
-    s += (player.secondHero.hp / player.secondHero.maxHp) * WEIGHTS.heroHpFraction;
-    s += gearBonus(player.secondHero) * WEIGHTS.gearBonus;
-  }
   return s;
 }
 

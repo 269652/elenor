@@ -485,20 +485,16 @@ export function HexBoard({
 
       {/* Hero markers */}
       {state.players.map((p) => (
-        <g key={p.hero.id}>
-          <HeroMarker coord={p.hero.position} color={p.color} label={p.name[0]?.toUpperCase() ?? '?'} isSecond={false} />
-          {p.secondHero && <HeroMarker coord={p.secondHero.position} color={p.color} label={p.name[0]?.toUpperCase() ?? '?'} isSecond />}
-        </g>
+        <HeroMarker key={p.hero.id} coord={p.hero.position} color={p.color} label={p.name[0]?.toUpperCase() ?? '?'} />
       ))}
     </svg>
   );
 }
 
-function HeroMarker({ coord, color, label, isSecond }: { coord: HexCoord; color: string; label: string; isSecond: boolean }) {
+function HeroMarker({ coord, color, label }: { coord: HexCoord; color: string; label: string }) {
   const { x, y } = axialToPixel(coord, HEX_SIZE);
-  const offset = isSecond ? 13 : -13;
   return (
-    <g transform={`translate(${x + offset}, ${y + 16})`} filter="url(#tokenShadow)">
+    <g transform={`translate(${x}, ${y + 16})`} filter="url(#tokenShadow)">
       <circle r={10.5} fill="#14110c" />
       <circle r={9.5} fill={color} stroke="#f2c869" strokeWidth={1.25} />
       <text textAnchor="middle" dy={4} fontSize={10.5} fill="#14110c" fontWeight={800} fontFamily="Georgia, serif">
