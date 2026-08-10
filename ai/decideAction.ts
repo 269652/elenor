@@ -838,7 +838,23 @@ const BUILDING_UTILITY: Partial<Record<BuildingType, number>> = {
   // "wasted" the way surplus Food is, and this is a prerequisite for having an army at all —
   // see barracksPlanFor, which now refuses to commit to a Barracks without a food engine.
   CowStable: 3.4,
-  Watchtower: 1.8,
+  // [DEFAULT — balance rework pass 4, bugfix] Raised 1.8 -> 3.8 (not just to 2.6 — see below).
+  // findBestBuildCandidate picks the SINGLE highest-scoring action across the WHOLE empire each
+  // turn, and the empire keeps drawing a brand-new tile every round (§3), so there is almost
+  // always a fresh Farm/Sawmill/Mine/CowStable-tier opportunity (3-3.4) competing for that one
+  // action. A first attempt at 2.6 (barely above the old 1.8) measured BYTE-IDENTICAL simulation
+  // output to the unfixed version across an 8-game sweep — proof the ever-expanding tile pool
+  // drowns out anything that doesn't clear the production-building band outright, not just edge
+  // above it. 3.8 sits above CowStable (3.4), the same fix already applied to Barracks (was 2.4,
+  // is 6) for the identical reason, documented in that entry's own comment below.
+  Watchtower: 3.8,
+  // [DEFAULT — balance rework pass 4, bugfix] Smithy previously had NO entry here at all, so it
+  // fell to the bare `?? 2` default. Same fix and same reasoning as Watchtower directly above —
+  // a measured 8-game sweep at the "just barely above default" value of 2.8 still produced ZERO
+  // CraftGear actions and byte-identical output to having no fix at all, even in 60+ round games
+  // sitting on 300+ idle Ore. 4.0 clears the production-building band so a Smithy can actually
+  // win the turn it's genuinely the best use of an empty Mountain tile.
+  Smithy: 4.0,
 };
 
 /** Bonus applied to a CowStable (new build or upgrade) once the player has an army or is saving
