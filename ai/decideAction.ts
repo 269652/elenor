@@ -870,6 +870,13 @@ const ARMY_MEAT_BONUS = 1.6;
  *  Barracks itself, because nothing else the AI can build stops the bleeding. */
 const STARVING_MEAT_BONUS = 2.5;
 
+/** [DEFAULT — balance rework pass 4, bugfix] Scoped bonus for upgrading an EXISTING Watchtower —
+ *  see its call site in findBestBuildCandidate for the full measured-sweep story. 2.0 pushes a
+ *  tier-1->2 upgrade's score to 3.8 - 0.4 + 2.0 = 5.4, close to (but still under) Barracks's own
+ *  5.6, so an existing Watchtower actually climbs tiers over the course of a game without
+ *  outbidding the one building the whole Risk layer depends on. */
+const WATCHTOWER_UPGRADE_BONUS = 2.0;
+
 /** Upgrading trades away the +1 VP a brand-new building on a fresh tile would have scored
  *  (VP_PER_BUILDING) and doesn't develop any new territory — same +1 resource/turn otherwise. So
  *  an upgrade is worth slightly less than constructing the same building somewhere new, and this
@@ -1310,6 +1317,16 @@ function findBestBuildCandidate(
         if (feedingAnArmy) score += ARMY_MEAT_BONUS;
         score += starvationBonus;
       }
+      // [DEFAULT — balance rework pass 4, bugfix] Even after raising Watchtower's own base value
+      // (1.8 -> 3.8) to get it BUILT at all, a measured sweep found tier upgrades still fired
+      // ZERO times across 8 fresh games — 3.8 - UPGRADE_VP_DISCOUNT(0.4) = 3.4 still loses to the
+      // ever-present pool of fresh-tile new-build options (3-3.4), the same mechanism that
+      // originally starved the base value. Rather than raising the base further (which would just
+      // make the AI over-build Watchtowers instead of fixing upgrades — it's already gone from
+      // 0-5 to 0-15 per game at 3.8), a bonus scoped to the UPGRADE path specifically lets an
+      // EXISTING Watchtower actually climb tiers without inflating how eagerly new ones get
+      // built on empty tiles.
+      if (tile.building.type === 'Watchtower') score += WATCHTOWER_UPGRADE_BONUS;
       if (!best || score > best.score) {
         best = { action: { type: 'UpgradeBuilding', actorId: player.id, coord }, score };
       }
