@@ -4,7 +4,9 @@ import { useState } from 'react';
 import {
   BUILDING_DEFINITIONS,
   CAPITAL_TIERS,
+  LOOT_SELL_TROOPS,
   RESOURCE_TYPES,
+  SMITHY_CRAFT_COSTS,
   applyMageDiscount,
   classDefFor,
   effectiveTileType,
@@ -17,6 +19,7 @@ import {
   type BuildingType,
   type GameState,
   type HexCoord,
+  type LootRarity,
   type Player,
   type ResourceCost,
 } from '@/engine';
@@ -103,6 +106,15 @@ export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: Bu
   const isBarracksTile = !!(buildingOnTile?.type === 'Barracks' && ownsTile);
   const barracksReserve = isBarracksTile ? (tile?.militiaCount ?? 0) : 0;
 
+  // [DEFAULT — balance rework pass 4] CraftGear/SellLoot both require the hero to be physically
+  // standing on the tile (same as any action paid carried-first — see the "Paying with..." note
+  // above), not just the player owning it, so both are gated on isLocal in addition to the
+  // matching building being here.
+  const isSmithyTile = !!(buildingOnTile?.type === 'Smithy' && ownsTile && isLocal);
+  const RARITIES: LootRarity[] = ['Common', 'Uncommon', 'Rare', 'Legendary'];
+
+  const sellableLoot = isBarracksTile && isLocal ? hero.inventory.filter((c) => !hero.equippedLootIds.includes(c.id)) : [];
+
   if (!selectedCoord) {
     return <p className="text-xs text-hx-ink-faint">Select a tile you own on the map to build.</p>;
   }
@@ -169,6 +181,29 @@ export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: Bu
           </div>
         ))}
 
+      {isSmithyTile && (
+        <div className="flex flex-col gap-2 rounded-sm border border-hx-arcane/40 bg-hx-arcane/10 p-2.5">
+          <span className="font-mono text-[10px] uppercase tracking-wide text-hx-arcane">⚒️ Smithy — Craft Gear</span>
+          <div className="grid grid-cols-2 gap-1.5">
+            {RARITIES.map((rarity) => {
+              const cost = isMage ? applyMageDiscount(SMITHY_CRAFT_COSTS[rarity]) : SMITHY_CRAFT_COSTS[rarity];
+              return (
+                <button
+                  key={rarity}
+                  type="button"
+                  disabled={!canAct || !canAffordHere(cost)}
+                  onClick={() => void dispatch({ type: 'CraftGear', actorId: player.id, coord: selectedCoord, rarity })}
+                  className="flex flex-col gap-0.5 rounded-sm border border-hx-arcane/60 bg-hx-arcane/15 px-2 py-1.5 text-left transition hover:bg-hx-arcane/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span className="text-xs font-semibold text-hx-ink">{rarity}</span>
+                  <span className="font-mono text-[10px] text-hx-ink-dim">{costLabel(cost)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {isBarracksTile && (
         <div className="flex flex-col gap-2 rounded-sm border border-hx-copper/40 bg-hx-copper/10 p-2.5">
           <span className="font-mono text-[10px] uppercase tracking-wide text-hx-copper">Barracks — Deploy (reserve: {barracksReserve})</span>
@@ -203,6 +238,28 @@ export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: Bu
               🛡️ Deploy {Math.min(deployCount, barracksReserve)} to garrison
             </button>
           </div>
+
+          {sellableLoot.length > 0 && (
+            <div className="flex flex-col gap-1.5 border-t border-hx-copper/30 pt-2">
+              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-copper">Sell Loot for Soldiers</span>
+              <div className="flex flex-col gap-1">
+                {sellableLoot.map((card) => (
+                  <button
+                    key={card.id}
+                    type="button"
+                    disabled={!canAct}
+                    onClick={() => void dispatch({ type: 'SellLoot', actorId: player.id, lootCardId: card.id, coord: selectedCoord })}
+                    className="flex items-center justify-between gap-2 rounded-sm border border-hx-copper/50 bg-hx-copper/10 px-2 py-1 text-left transition hover:bg-hx-copper/25 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="truncate text-[11px] text-hx-ink">
+                      {card.name} <span className="text-hx-ink-faint">({card.rarity})</span>
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-hx-ink-dim">+{LOOT_SELL_TROOPS[card.rarity]} 🪖</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

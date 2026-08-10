@@ -8,17 +8,31 @@
  * over the same §6.3 rules (docs/rules-reference.md) the real reducer uses.
  */
 
+import { WATCHTOWER_TIERS } from '@/engine';
+
+/** [DEFAULT — balance rework pass 4] `defenderWatchtowerTier` mirrors engine/combat.ts's own
+ *  tier-aware signature — 0 means no Watchtower, 1-3 the built tier (WATCHTOWER_TIERS). Every
+ *  prediction function below that used to take a plain boolean now takes this instead, so the
+ *  AI's expected-value math can never quietly drift out of sync with what a tiered Watchtower
+ *  actually does in a real resolved fight. */
+function watchtowerDieBonusAndCap(tier: number): { dieBonus: number; dieCap: number } {
+  if (tier <= 0) return { dieBonus: 0, dieCap: 6 };
+  const entry = WATCHTOWER_TIERS[Math.min(tier, WATCHTOWER_TIERS.length) - 1];
+  return { dieBonus: entry.dieBonus, dieCap: entry.dieCap };
+}
+
 /**
  * P(attacker's single d6 beats defender's single d6), ties favor the defender — exactly
  * mirrors engine/combat.ts's resolveArmyVsTerritory pairing rule. Computed by full enumeration
  * of all 36 (attackerDie, defenderDie) outcomes rather than approximated, so it's exact, not a
  * heuristic guess.
  */
-export function pairWinProbability(defenderHasWatchtower: boolean): number {
+export function pairWinProbability(defenderWatchtowerTier: number): number {
+  const { dieBonus, dieCap } = watchtowerDieBonusAndCap(defenderWatchtowerTier);
   let attackerWins = 0;
   for (let a = 1; a <= 6; a++) {
     for (let d = 1; d <= 6; d++) {
-      const defenderRoll = defenderHasWatchtower ? Math.min(d + 1, 6) : d;
+      const defenderRoll = Math.min(d + dieBonus, dieCap);
       if (a > defenderRoll) attackerWins++;
     }
   }
@@ -43,7 +57,7 @@ export interface BattlePrediction {
  * to pair against all of them — not "expected defender count reaches zero," which never
  * happens in a single-round model except in the trivial defendingUnits=0 case.
  */
-export function predictArmyVsTerritory(attackingUnits: number, defendingUnits: number, defenderHasWatchtower: boolean): BattlePrediction {
+export function predictArmyVsTerritory(attackingUnits: number, defendingUnits: number, defenderWatchtowerTier: number): BattlePrediction {
   if (attackingUnits <= 0) {
     return { expectedAttackerRemaining: 0, expectedDefenderRemaining: defendingUnits, captureProbability: defendingUnits === 0 ? 1 : 0 };
   }
@@ -51,7 +65,7 @@ export function predictArmyVsTerritory(attackingUnits: number, defendingUnits: n
     return { expectedAttackerRemaining: attackingUnits, expectedDefenderRemaining: 0, captureProbability: 1 };
   }
 
-  const p = pairWinProbability(defenderHasWatchtower);
+  const p = pairWinProbability(defenderWatchtowerTier);
   const pairs = Math.min(attackingUnits, defendingUnits);
   const expectedDefenderLosses = pairs * p;
   const expectedAttackerLosses = pairs * (1 - p);
@@ -97,9 +111,9 @@ export function duelWinProbability(attackerFlatMod: number, attackerHasAdvantage
  *  pairWinProbability, which this generalizes with a flat modifier on one side). `heroFlatMod` is
  *  level + attack + gearBonus, added to the hero's die the same way engine/combat.ts's
  *  rollHeroAttack computes a hero's total; `hasAdvantage` mirrors the Warrior 2d6-keep-highest
- *  perk, same convention as duelWinProbability. The opposing troop rolls a plain d6, boosted +1
- *  (capped at 6) by a defending Watchtower — the same distribution resolveArmyVsTerritory's
- *  defenderEntries use.
+ *  perk, same convention as duelWinProbability. The opposing troop rolls a plain d6, boosted by
+ *  a defending Watchtower's tier (WATCHTOWER_TIERS — 0 for none) exactly like
+ *  resolveArmyVsTerritory's defenderEntries.
  *
  *  Deliberately NOT a prediction of the full §6.3 ranked-pairing outcome — which pairing slot a
  *  joining hero's die actually lands in depends on how it ranks against the REST of its own side's
@@ -108,13 +122,14 @@ export function duelWinProbability(attackerFlatMod: number, attackerHasAdvantage
  *  question decideAction.ts's hero-join heuristic actually needs: "if this hero's die does get
  *  compared against an ordinary troop's, is that a good trade?" — enough to tell a sensible bet
  *  from a reckless one without duplicating that ranking logic in the AI layer. */
-export function heroPairWinProbability(heroFlatMod: number, hasAdvantage: boolean, defenderHasWatchtower: boolean): number {
+export function heroPairWinProbability(heroFlatMod: number, hasAdvantage: boolean, defenderWatchtowerTier: number): number {
+  const { dieBonus, dieCap } = watchtowerDieBonusAndCap(defenderWatchtowerTier);
   const heroDist = dieDistribution(hasAdvantage);
   let winProbability = 0;
   for (let heroDie = 1; heroDie <= 6; heroDie++) {
     const heroTotal = heroDie + heroFlatMod;
     for (let troopDie = 1; troopDie <= 6; troopDie++) {
-      const troopRoll = defenderHasWatchtower ? Math.min(troopDie + 1, 6) : troopDie;
+      const troopRoll = Math.min(troopDie + dieBonus, dieCap);
       if (heroTotal > troopRoll) winProbability += heroDist[heroDie] * (1 / 6);
     }
   }

@@ -37,7 +37,7 @@ describe('resolveArmyVsTerritory: hero battle die', () => {
   it('an attacking hero who wins their pairing kills the paired defender troop, costs no HP, and is not counted as a Soldier', () => {
     const cursor = findCursorForDie(SEED, 3); // the lone defending troop's roll
     const rng = new RngStream(SEED, cursor);
-    const outcome = resolveArmyVsTerritory(0, 1, false, rng, { heroId: 'h1', roll: heroRoll(10) }, null);
+    const outcome = resolveArmyVsTerritory(0, 1, 0, rng, { heroId: 'h1', roll: heroRoll(10) }, null);
 
     expect(outcome.attackerHeroOutcome).toBe('won');
     expect(outcome.attackerHeroDamage).toBe(0);
@@ -50,7 +50,7 @@ describe('resolveArmyVsTerritory: hero battle die', () => {
   it('an attacking hero who loses their pairing takes margin-scaled HP damage instead of costing a Soldier', () => {
     const cursor = findCursorForDie(SEED, 6); // the lone defending troop rolls the max
     const rng = new RngStream(SEED, cursor);
-    const outcome = resolveArmyVsTerritory(0, 1, false, rng, { heroId: 'h1', roll: heroRoll(3) }, null);
+    const outcome = resolveArmyVsTerritory(0, 1, 0, rng, { heroId: 'h1', roll: heroRoll(3) }, null);
 
     expect(outcome.attackerHeroOutcome).toBe('lost');
     expect(outcome.attackerHeroDamage).toBe(heroBattleDamage(3, 6)); // max(FLOOR, 6-3) = 3
@@ -61,7 +61,7 @@ describe('resolveArmyVsTerritory: hero battle die', () => {
   it('a tied roll favors the defender (§6.3) and still floors hero damage even at zero margin', () => {
     const cursor = findCursorForDie(SEED, 5);
     const rng = new RngStream(SEED, cursor);
-    const outcome = resolveArmyVsTerritory(0, 1, false, rng, { heroId: 'h1', roll: heroRoll(5) }, null);
+    const outcome = resolveArmyVsTerritory(0, 1, 0, rng, { heroId: 'h1', roll: heroRoll(5) }, null);
 
     expect(outcome.attackerHeroOutcome).toBe('lost');
     expect(outcome.attackerHeroDamage).toBe(HERO_BATTLE_DAMAGE_FLOOR);
@@ -70,7 +70,7 @@ describe('resolveArmyVsTerritory: hero battle die', () => {
   it('a defending hero participates symmetrically', () => {
     const cursor = findCursorForDie(SEED, 2); // the lone attacking troop's roll
     const rng = new RngStream(SEED, cursor);
-    const outcome = resolveArmyVsTerritory(1, 0, false, rng, null, { heroId: 'd1', roll: heroRoll(9) });
+    const outcome = resolveArmyVsTerritory(1, 0, 0, rng, null, { heroId: 'd1', roll: heroRoll(9) });
 
     expect(outcome.defenderHeroOutcome).toBe('won');
     expect(outcome.defenderHeroDamage).toBe(0);
@@ -85,7 +85,7 @@ describe('resolveArmyVsTerritory: hero battle die', () => {
     const rng = new RngStream(SEED, cursor);
     // attackingUnits=1 (troop) + hero(total=1) vs defendingUnits=1: pairs=1, and the troop (6)
     // outranks the hero (1) within the attacker's own sorted array, so it claims the only slot.
-    const outcome = resolveArmyVsTerritory(1, 1, false, rng, { heroId: 'h1', roll: heroRoll(1) }, null);
+    const outcome = resolveArmyVsTerritory(1, 1, 0, rng, { heroId: 'h1', roll: heroRoll(1) }, null);
 
     expect(outcome.attackerHeroOutcome).toBeNull();
     expect(outcome.attackerHeroDamage).toBe(0);
@@ -93,8 +93,8 @@ describe('resolveArmyVsTerritory: hero battle die', () => {
 
   it('omitting both hero params (undefined) behaves identically to explicit nulls and to the pre-existing signature', () => {
     const cursor = findCursorForDie(SEED, 4);
-    const withoutArgs = resolveArmyVsTerritory(3, 2, false, new RngStream(SEED, cursor));
-    const withNulls = resolveArmyVsTerritory(3, 2, false, new RngStream(SEED, cursor), null, null);
+    const withoutArgs = resolveArmyVsTerritory(3, 2, 0, new RngStream(SEED, cursor));
+    const withNulls = resolveArmyVsTerritory(3, 2, 0, new RngStream(SEED, cursor), null, null);
 
     expect(withoutArgs).toEqual(withNulls);
     expect(withoutArgs.attackerHeroOutcome).toBeNull();

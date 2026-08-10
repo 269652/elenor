@@ -48,6 +48,7 @@ import {
   applyMageDiscount,
   ASHLAND_QUARRY_PRODUCES_ON_EVEN_ROUNDS_ONLY,
   BARRACKS_RESERVE_CAP,
+  BARRACKS_TIERS,
   BUILDING_DEFINITIONS,
   CAPITAL_TIERS,
   CLASS_DEFINITIONS,
@@ -56,8 +57,10 @@ import {
   LEVEL_UP_COST,
   LEVEL_UP_MAX_HP_BONUS,
   MEAT_UPKEEP_VALUE,
+  LOOT_SELL_TROOPS,
   MIN_SOLDIERS_LEFT_BEHIND,
   ROAD_COST,
+  SMITHY_CRAFT_COSTS,
   SOLDIER_UPKEEP_FOOD_PER_GROUP,
   SOLDIER_UPKEEP_GROUP_SIZE,
   soldiersPerRoundFor,
@@ -101,6 +104,8 @@ import {
   TILE_RESOURCE,
   type BuildBuildingAction,
   type BuildRoadAction,
+  type CraftGearAction,
+  type SellLootAction,
   type DeploySoldiersAction,
   type MoveSoldiersAction,
   type DepositResourcesAction,
@@ -469,9 +474,15 @@ function accumulateTileProduction(draft: GameState, playerId: PlayerId) {
           .reduce((sum, t) => sum + (t.militiaCount ?? 0), 0);
         const foodEquivalentOnHand = player.resources.Food + player.resources.Meat * MEAT_UPKEEP_VALUE;
         if (foodEquivalentOnHand >= soldierUpkeepUnits(currentArmy)) {
+          // [DEFAULT — balance rework pass 4] A Barracks's own tier (BARRACKS_TIERS,
+          // constants.ts) — not just territory — now sets its recruiting rate and reserve cap.
+          // Tier 1 reads BARRACKS_RESERVE_CAP/soldiersPerRoundFor's default divisor exactly as
+          // before an upgrade; the fallback (?? BARRACKS_TIERS[0]) only matters for an
+          // out-of-range tier and can never actually be hit in practice.
+          const barracksTier = BARRACKS_TIERS[Math.min(tierOf(building), BARRACKS_TIERS.length) - 1] ?? BARRACKS_TIERS[0];
           // Risk-style: reinforcements scale with how much ground you hold — see
           // constants.ts's soldiersPerRoundFor.
-          const rawRecruits = soldiersPerRoundFor(player.ownedTiles.length);
+          const rawRecruits = soldiersPerRoundFor(player.ownedTiles.length, barracksTier.tilesPerSoldier);
           // [DEFAULT — troop cap] The TOTAL army (currentArmy, same garrisonOwnerOf basis as the
           // upkeep bill above) can never exceed troopCapFor(waterTiles owned) — this is the one
           // place new Soldiers are ever created, so it's the only place that needs the clamp;
@@ -482,7 +493,7 @@ function accumulateTileProduction(draft: GameState, playerId: PlayerId) {
           }).length;
           const roomUnderTroopCap = Math.max(0, troopCapFor(waterTiles) - currentArmy);
           const recruits = Math.min(rawRecruits, roomUnderTroopCap);
-          tile.militiaCount = Math.min(BARRACKS_RESERVE_CAP, (tile.militiaCount ?? 0) + recruits);
+          tile.militiaCount = Math.min(barracksTier.reserveCap, (tile.militiaCount ?? 0) + recruits);
           tile.garrisonOwnerId = player.id;
         }
       }
@@ -1019,7 +1030,7 @@ export function applyBuild(state: GameState, action: BuildBuildingAction): GameS
   if (action.buildingType === 'Capital') {
     if (hexKey(action.coord) !== hexKey(player.capitalTile)) throw new IllegalActionError('Capital upgrade must target your Capital tile');
     const nextTier = CAPITAL_TIERS[player.capitalTier];
-    if (!nextTier) throw new IllegalActionError('Town is already at max tier (5)');
+    if (!nextTier) throw new IllegalActionError(`Town is already at max tier (${CAPITAL_TIERS.length})`);
     const cost = isMage ? applyMageDiscount(nextTier.cost) : nextTier.cost;
     if (!combinedAfford(player, hero, action.coord, cost)) throw new IllegalActionError('Cannot afford this Town tier');
     return produce(state, (draft) => {
@@ -1145,6 +1156,91 @@ export function applyDeploySoldiers(state: GameState, action: DeploySoldiersActi
   });
 }
 
+/** [DEFAULT — balance rework pass 4, new mechanic] Spends SMITHY_CRAFT_COSTS[rarity]
+ *  (constants.ts) to draw ONE guaranteed-rarity LootCard from the shared lootDeck — see
+ *  CraftGearAction's doc comment in types.ts for the full design rationale. Phase 5, free — like
+ *  DeploySoldiers/MoveSoldiers, does NOT consume the turn's one Build slot (§7), so it can
+ *  repeat every turn resources allow rather than competing with actually constructing things. */
+export function applyCraftGear(state: GameState, action: CraftGearAction): GameState {
+  requireCurrentPlayer(state, action.actorId);
+  requirePhase(state, Phase.Build);
+  const player = findPlayer(state, action.actorId);
+  const hero = resolveHero(player, action.heroId);
+  const tile = tileAt(state, action.coord);
+  if (!tile || tile.ownerId !== action.actorId || tile.building?.type !== 'Smithy') {
+    throw new IllegalActionError('CraftGear requires your own Smithy tile');
+  }
+  if (!sameCoord(hero.position, action.coord)) throw new IllegalActionError('Hero must be standing at the Smithy to craft');
+
+  const isMage = classDefFor(player).startingBonus.kind === 'Mage';
+  const cost = isMage ? applyMageDiscount(SMITHY_CRAFT_COSTS[action.rarity]) : SMITHY_CRAFT_COSTS[action.rarity];
+  if (!combinedAfford(player, hero, action.coord, cost)) throw new IllegalActionError('Cannot afford to craft that rarity');
+
+  return produce(state, (draft) => {
+    const rng = new RngStream(draft.rngSeed, draft.rngCursor);
+    const p = findPlayerMut(draft, action.actorId);
+    const h = heroMut(p, action.heroId);
+    combinedPay(p, h, action.coord, cost);
+    // Exhausted rarity — the craft still stands (resources are spent either way), just
+    // empty-handed; see drawLoot's doc comment (decks.ts) and §5.3.
+    const { card, deck } = drawLoot(draft.lootDeck, action.rarity, rng);
+    draft.lootDeck = deck;
+    if (card) h.inventory.push(card);
+    draft.rngCursor = rng.cursor;
+    pushEvent(draft, action.actorId, 'GearCrafted', { coord: action.coord, rarity: action.rarity, lootCardId: card?.id ?? null });
+  });
+}
+
+/** [DEFAULT — balance rework pass 4, new mechanic, direct request] CraftGear's inverse: sells a
+ *  Loot card for LOOT_SELL_TROOPS[rarity] Soldiers at a Barracks — see SellLootAction's doc
+ *  comment in types.ts. Phase 5, free — like CraftGear/DeploySoldiers, does NOT consume the
+ *  turn's one Build slot. */
+export function applySellLoot(state: GameState, action: SellLootAction): GameState {
+  requireCurrentPlayer(state, action.actorId);
+  requirePhase(state, Phase.Build);
+  const player = findPlayer(state, action.actorId);
+  const hero = resolveHero(player, action.heroId);
+  const tile = tileAt(state, action.coord);
+  if (!tile || tile.ownerId !== action.actorId || tile.building?.type !== 'Barracks') {
+    throw new IllegalActionError('SellLoot requires your own Barracks tile');
+  }
+  if (!sameCoord(hero.position, action.coord)) throw new IllegalActionError('Hero must be standing at the Barracks to sell gear there');
+  const card = hero.inventory.find((c) => c.id === action.lootCardId);
+  if (!card) throw new IllegalActionError('You do not have that Loot card');
+  // [BUG FIX — matches the same class of fix applyBuild/applyDeploySoldiers already carry] The
+  // reserve this sale would top up belongs to whoever GARRISONS the tile, not just whoever owns
+  // the ground under it — selling into a Barracks a rival is currently squatting on would
+  // silently donate fresh troops to THEIR garrison. Retake it with MoveSoldiers first.
+  const existingGarrison = garrisonOwnerOf(tile);
+  if (existingGarrison !== null && existingGarrison !== action.actorId) {
+    throw new IllegalActionError('This Barracks is occupied by a rival garrison — retake it with MoveSoldiers first');
+  }
+
+  const barracksTier = BARRACKS_TIERS[Math.min(tierOf(tile.building), BARRACKS_TIERS.length) - 1] ?? BARRACKS_TIERS[0];
+  const currentArmy = Object.values(state.map)
+    .filter((t) => garrisonOwnerOf(t) === player.id)
+    .reduce((sum, t) => sum + (t.militiaCount ?? 0), 0);
+  const waterTiles = player.ownedTiles.filter((c) => {
+    const t = state.map[hexKey(c)];
+    return !!t && effectiveTileType(t) === 'River';
+  }).length;
+  const roomUnderTroopCap = Math.max(0, troopCapFor(waterTiles) - currentArmy);
+  const roomUnderReserveCap = Math.max(0, barracksTier.reserveCap - (tile.militiaCount ?? 0));
+  const granted = Math.min(LOOT_SELL_TROOPS[card.rarity], roomUnderTroopCap, roomUnderReserveCap);
+  if (granted <= 0) throw new IllegalActionError('This Barracks has no room for more Soldiers right now (reserve or troop cap full)');
+
+  return produce(state, (draft) => {
+    const p = findPlayerMut(draft, action.actorId);
+    const h = heroMut(p, action.heroId);
+    h.inventory = h.inventory.filter((c) => c.id !== action.lootCardId);
+    h.equippedLootIds = h.equippedLootIds.filter((id) => id !== action.lootCardId);
+    const draftTile = findTileMut(draft, action.coord);
+    draftTile.militiaCount = (draftTile.militiaCount ?? 0) + granted;
+    draftTile.garrisonOwnerId = action.actorId;
+    pushEvent(draft, action.actorId, 'LootSold', { coord: action.coord, lootCardId: action.lootCardId, rarity: card.rarity, troopsGranted: granted });
+  });
+}
+
 /** [DEFAULT — roads] Lays one road segment along a tile edge — see BuildRoadAction in types.ts.
  *  Free action: not phase-gated and doesn't consume the Build slot. */
 export function applyBuildRoad(state: GameState, action: BuildRoadAction): GameState {
@@ -1243,7 +1339,8 @@ export function applyMoveSoldiers(state: GameState, action: MoveSoldiersAction):
 
     // Defended: the §6.3 dice resolve on contact. Same math as before, new trigger.
     const defendingUnits = draftTo.militiaCount ?? 0;
-    const hasWatchtower = draftTo.building?.type === 'Watchtower';
+    // [DEFAULT — balance rework pass 4] Tier-aware — 0 means no Watchtower here at all.
+    const watchtowerTier = draftTo.building?.type === 'Watchtower' ? tierOf(draftTo.building) : 0;
 
     const attackerPlayer = findPlayerMut(draft, action.actorId);
     let attackerHeroDie: HeroBattleDie | null = null;
@@ -1261,7 +1358,7 @@ export function applyMoveSoldiers(state: GameState, action: MoveSoldiersAction):
       defenderHeroDie = { heroId: defenderPlayer.hero.id, roll: rollHeroAttack(defenderPlayer.hero, defenderPlayer, rng) };
     }
 
-    const outcome = resolveArmyVsTerritory(action.count, defendingUnits, hasWatchtower, rng, attackerHeroDie, defenderHeroDie);
+    const outcome = resolveArmyVsTerritory(action.count, defendingUnits, watchtowerTier, rng, attackerHeroDie, defenderHeroDie);
 
     if (outcome.tileCaptured) {
       draftTo.militiaCount = outcome.attackerRemaining;
@@ -1315,7 +1412,17 @@ export function applyMoveSoldiers(state: GameState, action: MoveSoldiersAction):
  *  theirs once enough rounds have passed. Runs at the start of their turn so a rival gets
  *  multiple turns in between to march back and contest it — not just one, per the tuned value.
  *
- *  Capturing a Capital still eliminates its owner, same as the old rule. */
+ *  [DEFAULT — balance rework pass 4] Capturing a Capital still eliminates its owner, same as
+ *  before — but now ALSO ends the whole game immediately in the claimant's favor (§11's new
+ *  Capital Conquest win condition), superseding the old "eliminate every rival" Domination path
+ *  outright (checkWinConditions, selectors.ts, no longer has that clause at all — a single
+ *  Capital is enough, regardless of how many other players remain seated). This is checked and
+ *  set HERE, the instant the claim settles, not at round end like the other three conditions —
+ *  see maybeEndRound below, which never gets the chance to run for this player's turn again
+ *  once winnerId is set, since requireCurrentPlayer rejects every further action. The `!
+ *  draft.winnerId` guard is a defensive no-op in the normal single-capital case; it only matters
+ *  if this same Phase 0 sweep somehow settles two rival Capitals in one pass, so the first one
+ *  standing is the one that wins rather than a later iteration silently overwriting it. */
 function claimHeldTerritory(draft: GameState, playerId: PlayerId) {
   for (const tile of Object.values(draft.map)) {
     if (tile.ownerId === playerId) continue;
@@ -1335,6 +1442,12 @@ function claimHeldTerritory(draft: GameState, playerId: PlayerId) {
       if (hexKey(tile.coord) === hexKey(loser.capitalTile)) {
         loser.isEliminated = true;
         pushEvent(draft, 'system', 'PlayerEliminated', { playerId: previousOwnerId });
+        if (!draft.winnerId) {
+          draft.winnerId = playerId;
+          draft.winCondition = 'CapitalConquest';
+          draft.status = 'finished';
+          pushEvent(draft, 'system', 'GameEnded', { winnerId: playerId, winCondition: 'CapitalConquest' });
+        }
       }
     }
     pushEvent(draft, playerId, 'TerritoryClaimed', { coord: tile.coord, from: previousOwnerId ?? null });

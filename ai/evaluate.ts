@@ -21,6 +21,12 @@ import {
 } from '@/engine';
 import { garrisonOwnerOf } from '@/engine/reducers';
 
+/** [DEFAULT — balance rework pass 4] Diminishing-returns cap for capitalDefenseScore below — a
+ *  defended Capital shouldn't keep soaking up every spare Soldier once it's already reasonably
+ *  safe; the rest are worth more elsewhere (militia's own weight, or a rival Capital via
+ *  capitalAssault). */
+const CAPITAL_ADEQUATE_GARRISON = 5;
+
 const WEIGHTS = {
   victoryPoint: 10, // the actual win condition — dominant term by design
   ownedTile: 1.5, // territory is both economy and Domination-win progress
@@ -40,8 +46,45 @@ const WEIGHTS = {
   /** The mirror image: OUR troops standing on ground that isn't ours yet. Same discount, same
    *  reasoning — it becomes a real tile at the start of a later turn if it survives. */
   pendingOccupation: 5,
-  /** ...and if that ground is a rival's Capital, claiming it eliminates them outright. */
-  capitalAssault: 12,
+  /** [DEFAULT — balance rework pass 4: raised 12 -> 220] ...and if that ground is a rival's
+   *  Capital, claiming it now wins the ENTIRE GAME OUTRIGHT the instant the claim settles (§11's
+   *  Capital Conquest), not merely "eliminates them" the way the old, much smaller weight
+   *  reflected. This has to dwarf every other term combined so the search actively HUNTS for the
+   *  opportunity rather than only mildly preferring it over any other tile — no realistic
+   *  single-turn swing from VP/territory/army/gear terms combined comes close to 220, so an
+   *  undefended (or beatable) rival Capital always reads as the single best move on the board. */
+  capitalAssault: 220,
+  /** [DEFAULT — balance rework pass 4, new] The mirror image of capitalAssault — a RIVAL
+   *  garrison standing on OUR OWN Capital is not just "a tile we might lose" (occupiedByRival,
+   *  below); every round it survives there is a round closer to losing the whole game the
+   *  instant that claim settles. Stacks on top of occupiedByRival's generic penalty so a
+   *  threatened Capital dominates the AI's attention immediately. */
+  ownCapitalOccupiedByRival: 150,
+  /** [DEFAULT — balance rework pass 4, new] Flat reward (diminishing past
+   *  CAPITAL_ADEQUATE_GARRISON) for Soldiers standing ON the player's own Capital tile, ON TOP
+   *  OF the ordinary `militia` weight below (which already counts them once regardless of
+   *  position) — see capitalDefenseScore below. Without this, a garrison is worth the same
+   *  wherever it stands, so nothing ever priced "defend home" above "attack the frontier" —
+   *  exactly the gap a live simulation confirmed (garrisons split anywhere from 0% to 94% home
+   *  per player, no consistent doctrine).
+   *
+   *  [DEFAULT — balance rework pass 4, bugfix] Deliberately NOT scaled by how big a nearby rival
+   *  threat currently is, despite that reading like the obviously-right refinement at first: a
+   *  march that ATTACKS AND ELIMINATES the very stack sitting next to the Capital would make its
+   *  own resulting hypothetical read as "threat gone," collapsing the multiplier and scoring the
+   *  garrison drop as a bigger loss than the win it just achieved. Reacting specifically to a
+   *  live nearby threat is decideAction.ts's considerCapitalDefense's job — decision-time, not
+   *  evaluation-time — precisely so it can't create that paradox.
+   *
+   *  [DEFAULT — balance rework pass 4, bugfix] Also deliberately SMALL — 0.4, not the original
+   *  2.5. A single §6.3 pairing is defender-favored even at unfavorable odds for the defender
+   *  (ties go to the defender, and only min(attackers, defenders) units ever pair at all, so a
+   *  5-vs-1 skirmish is still just one coin-flip-ish pairing, not five), so a weight anywhere
+   *  near `militia`'s own 0.75 made the mere act of marching soldiers away from the Capital —
+   *  win, lose, or draw — outweigh a clearly good trade nearby, and findBestTerritoryAttack
+   *  stopped recommending attacks adjacent to the Capital at all. 0.4 keeps home genuinely worth
+   *  a little more than the frontier without overriding an otherwise-favorable fight. */
+  capitalGarrison: 0.4,
   heroLevel: 3, // levels compound (combat power + eventual VP milestones + Hero-Level win)
   heroHpFraction: 4, // a hero at 10% HP is one bad roll from a costly respawn — weight the risk
   gearBonus: 1, // equipped combat power, smaller than level since it's more easily lost
@@ -68,6 +111,7 @@ export function evaluatePosition(state: GameState, playerId: string): number {
   score += roadConnectedTiles(state, player).size * WEIGHTS.roadConnectedTile;
   score += scoreHero(player);
   score += scoreArmyAndOccupation(state, player);
+  score += capitalDefenseScore(state, player);
   score += totalResourceWealth(player) * WEIGHTS.resourceWealth;
 
   for (const rival of state.players) {
@@ -109,6 +153,10 @@ function scoreArmyAndOccupation(state: GameState, player: Player): number {
       }
     } else if (garrison !== null && tile.ownerId === player.id) {
       score -= WEIGHTS.occupiedByRival;
+      // [DEFAULT — balance rework pass 4] A rival standing on our OWN Capital is a countdown to
+      // losing the whole game (Capital Conquest, §11), not just this one tile — see
+      // ownCapitalOccupiedByRival's doc comment above.
+      if (hexKey(tile.coord) === hexKey(player.capitalTile)) score -= WEIGHTS.ownCapitalOccupiedByRival;
     }
   }
 
@@ -118,6 +166,20 @@ function scoreArmyAndOccupation(state: GameState, player: Player): number {
   score += Math.min(soldiers, feedable) * WEIGHTS.militia;
   score += Math.max(0, soldiers - feedable) * WEIGHTS.unfeedableMilitia;
   return score;
+}
+
+/** [DEFAULT — balance rework pass 4, new] Flat, diminishing-returns reward for a standing
+ *  garrison on the player's own Capital tile — see WEIGHTS.capitalGarrison's doc comment above
+ *  for why this is deliberately NOT scaled by any live nearby-threat measurement (that reads
+ *  like the natural refinement but creates a real evaluation paradox: attacking and eliminating
+ *  a threat next to the Capital would make its own resulting hypothetical score the win as a
+ *  loss). Urgency in the face of an actual threat is handled at decision-time instead — see
+ *  decideAction.ts's considerCapitalDefense. */
+function capitalDefenseScore(state: GameState, player: Player): number {
+  const capitalTile = state.map[hexKey(player.capitalTile)];
+  if (!capitalTile) return 0;
+  const garrison = garrisonOwnerOf(capitalTile) === player.id ? (capitalTile.militiaCount ?? 0) : 0;
+  return Math.min(garrison, CAPITAL_ADEQUATE_GARRISON) * WEIGHTS.capitalGarrison;
 }
 
 /** How many Soldiers this player's CURRENT wallet could pay upkeep on — the exact inverse of

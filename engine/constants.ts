@@ -118,6 +118,22 @@ export const ASHLAND_QUARRY_PRODUCES_ON_EVEN_ROUNDS_ONLY = true;
 // ── §6.3 Army vs Territory [DEFAULT] ────────────────────────────────────────────────────────
 export const WATCHTOWER_DIE_BONUS = 1;
 export const WATCHTOWER_DIE_CAP = 6;
+
+/** [DEFAULT — balance rework pass 4] Watchtower's upgrade track — same generalized-tier
+ *  mechanism as Farm/Quarry/CowStable (BuildingDefinition.upgrades, selectors.ts's
+ *  tierOf/nextUpgradeFor), except the thing that scales per tier is a defense bonus, not a
+ *  producesResource/produceAmount pair, so it's looked up here instead of read generically —
+ *  see combat.ts's resolveArmyVsTerritory, which takes the defending tile's Watchtower tier
+ *  directly and indexes this array. Tier 1 is the existing base build (WATCHTOWER_DIE_BONUS/CAP
+ *  above, unchanged) and costs nothing further; tiers 2-3 are real Stone+Ore(+some Wood) sinks
+ *  a mature economy actually wants, since a stronger Watchtower is exactly what makes "protect
+ *  your Capital and borders" a genuine building investment rather than only a garrison number —
+ *  directly motivated by Capital Conquest (§11) making a captured Capital an instant loss. */
+export const WATCHTOWER_TIERS = [
+  { tier: 1, cost: {} as ResourceCost, dieBonus: WATCHTOWER_DIE_BONUS, dieCap: WATCHTOWER_DIE_CAP },
+  { tier: 2, cost: { Wood: 3, Stone: 5, Ore: 3 } as ResourceCost, dieBonus: 2, dieCap: 6 },
+  { tier: 3, cost: { Wood: 6, Stone: 9, Ore: 6 } as ResourceCost, dieBonus: 3, dieCap: 8 },
+] as const;
 /** [DEFAULT — territory rework, tuned per designer feedback: was effectively 1 round] How many
  *  FULL rounds an occupier must hold a tile, uncontested, before ownership actually transfers
  *  (engine/reducers.ts's claimHeldTerritory). At 1 a raid could plant a flag and walk away with
@@ -184,8 +200,12 @@ export const HERO_BATTLE_XP_ON_WIN = 2;
 export const SOLDIERS_PER_TILES_DIVISOR = 3;
 export const SOLDIERS_PER_BARRACKS_MIN = 1;
 
-export function soldiersPerRoundFor(ownedTileCount: number): number {
-  return Math.max(SOLDIERS_PER_BARRACKS_MIN, Math.floor(ownedTileCount / SOLDIERS_PER_TILES_DIVISOR));
+/** [DEFAULT — balance rework pass 4] tilesPerSoldier defaults to the tier-1 divisor above so
+ *  every existing single-argument call site (a tier-1 Barracks) is unaffected. A tiered
+ *  Barracks (BARRACKS_TIERS below) passes its own, smaller divisor to recruit faster per owned
+ *  tile — see accumulateTileProduction in reducers.ts. */
+export function soldiersPerRoundFor(ownedTileCount: number, tilesPerSoldier: number = SOLDIERS_PER_TILES_DIVISOR): number {
+  return Math.max(SOLDIERS_PER_BARRACKS_MIN, Math.floor(ownedTileCount / tilesPerSoldier));
 }
 /** Caps an unvisited/undeployed Barracks reserve, same philosophy as TILE_STOCKPILE_CAP for
  *  resources — generous enough that "deploy when convenient" never actually loses production.
@@ -198,6 +218,21 @@ export function soldiersPerRoundFor(ownedTileCount: number): number {
  *  9 keeps a real standing army, still clears the AI's 6-soldier strike force, and bounds the
  *  unavoidable bill at 6 food-equivalent. */
 export const BARRACKS_RESERVE_CAP = 9;
+
+/** [DEFAULT — balance rework pass 4] Barracks's upgrade track, same generalized-tier mechanism
+ *  as Watchtower's above — a real, escalating Wood+Ore+Food sink (a mature economy's other
+ *  laggard resources, alongside Stone via Watchtower) that also raises the reserve cap and
+ *  recruits faster per owned tile, so a bigger, better-fed empire can field a correspondingly
+ *  bigger standing army rather than being permanently bottlenecked at the tier-1 numbers.
+ *  Tier 1 matches the existing BARRACKS_RESERVE_CAP/SOLDIERS_PER_TILES_DIVISOR exactly (nothing
+ *  about a freshly-built, unupgraded Barracks changes). A player may build more than one
+ *  Barracks (one per owned Plains tile, §7.1/§7.2) and upgrade each independently, so the total
+ *  sink scales with how large the empire already is. */
+export const BARRACKS_TIERS = [
+  { tier: 1, cost: {} as ResourceCost, reserveCap: BARRACKS_RESERVE_CAP, tilesPerSoldier: SOLDIERS_PER_TILES_DIVISOR },
+  { tier: 2, cost: { Wood: 6, Ore: 4, Food: 4 } as ResourceCost, reserveCap: 15, tilesPerSoldier: 2 },
+  { tier: 3, cost: { Wood: 10, Ore: 8, Food: 8 } as ResourceCost, reserveCap: 21, tilesPerSoldier: 1 },
+] as const;
 /** Upkeep is charged in food-equivalent units per full group of 3 Soldiers: 2 Food OR 1 Meat
  *  per group, combinable (MEAT_UPKEEP_VALUE says how much of the 2-unit bill one Meat covers).
  *  A partial trailing group (1-2 extra Soldiers) still costs a full group's bill — see
@@ -230,12 +265,23 @@ export const ROAD_COST: ResourceCost = { Wood: 1 };
  *  always "the next tier up"). Was a 2-tier table; stretched to 5 so the Town keeps being a real
  *  investment choice deep into a game that now often runs 20+ rounds, and so its VP contribution
  *  (VP_CAPITAL_TIER below) scales sensibly against the raised WIN_VP_THRESHOLD (30). */
+/** [DEFAULT — balance rework pass 4] Tier 6, "the Grand Bazaar," added on top of the 5-tier
+ *  ladder above — a genuine late-game wonder rather than a new BuildingType, so it reuses this
+ *  exact table/applyBuild code path with zero new tile-slot handling (a separate BuildingType
+ *  restricted to the Capital tile would collide with the Town/Capital Building already
+ *  occupying that tile's one building slot — see setup.ts). Its cost deliberately spans FIVE of
+ *  the six resources at once (only Meat excluded, since Meat's whole purpose is Soldier upkeep,
+ *  §6.3a) specifically to give Wood, Stone, Ore, and Gold — the four resources with no other
+ *  late-game sink (see the Building Cost Table below and Smithy/Watchtower/Barracks upgrades
+ *  above) — one big, satisfying, one-time drain each once the rest of the build tree is spent
+ *  out. */
 export const CAPITAL_TIERS = [
   { tier: 1, cost: {} as ResourceCost, heroMaxHpBonus: 2 }, // granted free at spawn
   { tier: 2, cost: { Wood: 3, Stone: 3, Food: 3 } as ResourceCost, heroMaxHpBonus: 3 },
   { tier: 3, cost: { Stone: 4, Ore: 3, Food: 4 } as ResourceCost, heroMaxHpBonus: 3 },
   { tier: 4, cost: { Ore: 5, Gold: 5 } as ResourceCost, heroMaxHpBonus: 3 },
   { tier: 5, cost: { Gold: 8, Ore: 6, Stone: 6 } as ResourceCost, heroMaxHpBonus: 5 },
+  { tier: 6, cost: { Wood: 15, Stone: 12, Ore: 10, Gold: 15, Food: 8 } as ResourceCost, heroMaxHpBonus: 4 },
 ] as const;
 
 // ── §7.4 Hero Level-Up & Equip [DEFAULT] ────────────────────────────────────────────────────
@@ -265,7 +311,7 @@ export const VP_PER_OWNED_TILE = 1;
 export const VP_PER_BUILDING = 1;
 /** [DEFAULT — territory rework: extended to 5 tiers, alongside CAPITAL_TIERS above] Tier 1 is
  *  free but still scores — it's the Town that already exists, not a discount. */
-export const VP_CAPITAL_TIER = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 6 } as const;
+export const VP_CAPITAL_TIER = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 6, 6: 8 } as const;
 export const VP_HERO_LEVEL_MILESTONES: Record<number, number> = { 3: 1, 5: 2, 7: 3, 10: 5 };
 export const VP_PER_LEGENDARY_LOOT = 2;
 
@@ -339,6 +385,38 @@ export const CLASS_DEFINITIONS: Record<string, ClassDefinition> = {
     name: 'Rogue',
     startingBonus: { kind: 'Rogue', passesThroughUnownedOrRivalTiles: true, stealsPerRound: 1 },
   },
+};
+
+// ── Smithy — CraftGear [DEFAULT — balance rework pass 4, new mechanic] ─────────────────────
+/** The Smithy's effectDescription ("crafts hero gear from Ore + Gold") predates any actual
+ *  implementation — see CraftGearAction in types.ts for the action this finally wires up. Cost
+ *  scales steeply with the rarity requested, deliberately the single largest recurring Ore AND
+ *  Gold sink in the game (both otherwise thin on late-game demand — see the Building Cost Table
+ *  below for everything else that touches them) — a player can keep crafting every turn their
+ *  wallet allows, which is what makes this a genuine sink rather than a one-off purchase.
+ *  Guaranteed rarity (unlike a monster kill's level-scaled odds) is the trade-off for the cost:
+ *  you're buying certainty, not a chance at one. */
+export const SMITHY_CRAFT_COSTS: Record<LootRarity, ResourceCost> = {
+  Common: { Ore: 3, Gold: 2 },
+  Uncommon: { Ore: 6, Gold: 4 },
+  Rare: { Ore: 10, Gold: 8 },
+  Legendary: { Ore: 16, Gold: 14 },
+};
+
+// ── SellLoot — gear-for-troops [DEFAULT — balance rework pass 4, new mechanic, direct request] ─
+/** "Treasure/equipment has a gold value, like in Munchkin, sellable for additional troops —
+ *  higher level equip = more troops." A Loot card sold at a Barracks (SellLootAction, the
+ *  inverse of CraftGear) grants this many Soldiers straight into that Barracks's reserve,
+ *  clamped by its BARRACKS_TIERS reserve cap and the player's overall troopCapFor the same way
+ *  ordinary recruitment is. Scales with rarity, not linearly with LOOT_RARITY_BONUS's own +1/+2/
+ *  +3/+5 combat-bonus curve — a Legendary is both rarer AND a much bigger one-time army swing
+ *  than 5x a Common would suggest, matching how much harder it is to come by in the first
+ *  place. */
+export const LOOT_SELL_TROOPS: Record<LootRarity, number> = {
+  Common: 1,
+  Uncommon: 2,
+  Rare: 4,
+  Legendary: 7,
 };
 
 // ── §7.1 Building Cost Table [CANON] ────────────────────────────────────────────────────────
@@ -429,7 +507,9 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     allowedTileTypes: ['Mountain'],
     cost: { Ore: 3, Stone: 2 },
     minRound: 5, // gear crafting is a mid-game power spike, not an opening move
-    effectDescription: 'Crafts hero gear from Ore + Gold; round 5+',
+    // [DEFAULT — balance rework pass 4] The crafting this describes is now real — see
+    // CraftGearAction / SMITHY_CRAFT_COSTS above.
+    effectDescription: 'Crafts a guaranteed Loot card of a chosen rarity from Ore + Gold (CraftGear, a free Phase 5 action); round 5+',
   },
   TradePost: {
     type: 'TradePost',
@@ -454,7 +534,12 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: 'Watchtower',
     allowedTileTypes: 'any',
     cost: { Stone: 2, Ore: 2 },
-    effectDescription: '+defense bonus in territory combat',
+    // [DEFAULT — balance rework pass 4] Upgrade costs are DERIVED from WATCHTOWER_TIERS above
+    // (tiers 2-3) rather than duplicated here, so the two can never drift out of sync — that
+    // table stays the single source of truth for both cost and effect (dieBonus/dieCap read
+    // directly off Building.tier by combat.ts, not through producesResource/produceAmount).
+    upgrades: WATCHTOWER_TIERS.slice(1).map((t) => ({ cost: t.cost })),
+    effectDescription: '+1 to each defending die (cap 6) in territory combat; upgradable through tier 3 to +3 (cap 8)',
   },
   Barracks: {
     type: 'Barracks',
@@ -464,7 +549,12 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     // price meant "no Mountain in your draws, no army, no Risk layer at all" — the bill should
     // measure how much you've built, not whether one specific terrain showed up.
     cost: { Wood: 3, Ore: 2, Food: 5 },
-    effectDescription: '+3 Soldiers/round into reserve (deploy with DeploySoldiers); Soldiers cost upkeep — 2 Food or 1 Meat per 3',
+    // [DEFAULT — balance rework pass 4] Same derive-from-the-tier-table pattern as Watchtower
+    // above — BARRACKS_TIERS stays the one place reserveCap/tilesPerSoldier per tier live.
+    upgrades: BARRACKS_TIERS.slice(1).map((t) => ({ cost: t.cost })),
+    effectDescription:
+      'Recruits Soldiers into reserve each round, scaled by owned territory (deploy with DeploySoldiers); ' +
+      'Soldiers cost upkeep — 2 Food or 1 Meat per 3; upgradable through tier 3 for a bigger reserve and faster recruiting',
   },
   CowStable: {
     type: 'CowStable',
@@ -488,7 +578,10 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: 'Capital',
     allowedTileTypes: 'starting-tile-only',
     cost: {}, // handled separately via CAPITAL_TIERS, not a normal Build action cost
-    effectDescription: 'Increases hero max HP; unlocks a second hero at a high VP milestone',
+    // [DEFAULT — balance rework pass 4] "unlocks a second hero" was stale — that feature was
+    // removed pre-launch (see selectors.ts's resolveHero doc comment); tier 6, "the Grand
+    // Bazaar," is the new capstone instead.
+    effectDescription: 'Increases hero max HP and Victory Points each tier; tier 6 ("the Grand Bazaar") is a late-game wonder capstone',
   },
 };
 

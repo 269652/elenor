@@ -135,7 +135,7 @@ export function produceAmountForTier(def: BuildingDefinition, tier: number): num
 
 /** The upgrade entry that would take a building from `currentTier` to the next one, or null if
  *  it's already maxed (or was never upgradable). */
-export function nextUpgradeFor(def: BuildingDefinition, currentTier: number): { cost: ResourceCost; produceAmount: number } | null {
+export function nextUpgradeFor(def: BuildingDefinition, currentTier: number): { cost: ResourceCost; produceAmount?: number } | null {
   if (!def.upgrades?.length || currentTier >= maxTierFor(def)) return null;
   return def.upgrades[currentTier - 1] ?? null;
 }
@@ -351,7 +351,15 @@ export function totalPlacedTiles(state: GameState): number {
 
 /** §11 win-condition trigger check, run at round end. Returns the winner if any condition
  *  was triggered this round, else null. Ties broken by VP, then by earlier turn-order
- *  position (§11 step 4). */
+ *  position (§11 step 4).
+ *
+ *  [DEFAULT — balance rework pass 4] Does NOT check Capital Conquest — that condition is
+ *  checked and set immediately, the instant a Capital's occupation claim settles, not
+ *  retroactively at round end like the three below (see reducers.ts's claimHeldTerritory). It
+ *  also supersedes what used to be here: Domination's old "every rival eliminated" clause is
+ *  gone — a single captured Capital already ends the whole game via Capital Conquest, so by the
+ *  time "every rival is eliminated" could ever be true, the game triggered Capital Conquest on
+ *  the very first one and this function never got the chance to run again for that match. */
 export function checkWinConditions(state: GameState): { winnerId: PlayerId; winCondition: WinCondition } | null {
   const activePlayers = state.players.filter((p) => !p.isEliminated);
   const totalTiles = totalPlacedTiles(state);
@@ -359,10 +367,8 @@ export function checkWinConditions(state: GameState): { winnerId: PlayerId; winC
   // on WIN_DOMINATION_MIN_TILES_PER_PLAYER for why this gate exists.
   const boardDevelopedEnoughForShareCheck = totalTiles >= state.players.length * WIN_DOMINATION_MIN_TILES_PER_PLAYER;
   // [DEFAULT — balance rework] Threshold wins can't land before the mid-game exists at all —
-  // see constants.ts's WIN_MIN_ROUND. Conquest is exempt on purpose (handled below).
+  // see constants.ts's WIN_MIN_ROUND.
   const pastMinRound = state.roundNumber >= WIN_MIN_ROUND;
-
-  const remainingOpponentsEliminated = (p: Player) => activePlayers.length === 1 && activePlayers[0].id === p.id && state.players.length > 1;
 
   const triggered: { playerId: PlayerId; condition: WinCondition; vp: number }[] = [];
 
@@ -372,9 +378,7 @@ export function checkWinConditions(state: GameState): { winnerId: PlayerId; winC
 
     if (pastMinRound && vp >= WIN_VP_THRESHOLD) triggered.push({ playerId: player.id, condition: 'VictoryPoints', vp });
     const shareWin = pastMinRound && boardDevelopedEnoughForShareCheck && ownedShare >= WIN_DOMINATION_TILE_SHARE;
-    // Wiping out every rival ends the game whenever it happens — there is nobody left to keep
-    // playing against, so WIN_MIN_ROUND deliberately does not apply to this path.
-    if (shareWin || remainingOpponentsEliminated(player)) {
+    if (shareWin) {
       triggered.push({ playerId: player.id, condition: 'Domination', vp });
     }
     if (pastMinRound && player.hero.level >= WIN_HERO_LEVEL_THRESHOLD) {

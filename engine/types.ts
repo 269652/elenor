@@ -163,11 +163,16 @@ export interface BuildingDefinition {
   minRound?: number;
   /** [DEFAULT — balance rework] Ordered list of tiers ABOVE tier 1, each reached by one
    *  UpgradeBuildingAction. upgrades[0] takes the building from tier 1 to tier 2, upgrades[1]
-   *  from 2 to 3, and so on — so a definition with 4 entries tops out at tier 5. Only
-   *  Farm/Quarry/CowStable define this; everything else stays single-tier. See selectors.ts's
-   *  maxTierFor/produceAmountForTier/upgradeToTier for the lookups, and reducers.ts's
-   *  applyUpgradeBuilding + accumulateTileProduction for how tier drives production. */
-  upgrades?: { cost: ResourceCost; produceAmount: number }[];
+   *  from 2 to 3, and so on — so a definition with 4 entries tops out at tier 5. Farm/Quarry/
+   *  CowStable define this for resource production; Watchtower/Barracks (balance rework pass 4)
+   *  also define it for their own non-resource tiered effects (defense bonus, reserve cap —
+   *  see constants.ts's WATCHTOWER_TIERS/BARRACKS_TIERS, the actual source of truth for those
+   *  effects, keyed by the same Building.tier this array's index advances). produceAmount is
+   *  therefore optional — present for the resource-producing trio, omitted for the other two.
+   *  See selectors.ts's maxTierFor/produceAmountForTier/upgradeToTier for the lookups, and
+   *  reducers.ts's applyUpgradeBuilding + accumulateTileProduction for how tier drives
+   *  production. */
+  upgrades?: { cost: ResourceCost; produceAmount?: number }[];
   effectDescription: string;
 }
 
@@ -397,7 +402,15 @@ export interface GameEvent {
 
 export type GameMode = 'realtime' | 'async' | 'hotseat';
 
-export type WinCondition = 'VictoryPoints' | 'Domination' | 'HeroLevelRace';
+/** [DEFAULT — balance rework pass 4] 'CapitalConquest' added: the instant ANY rival's Capital
+ *  tile's occupation claim settles (§6.3's territory-claim mechanic, unchanged) in a player's
+ *  favor, that player wins immediately — see reducers.ts's claimHeldTerritory. Checked at the
+ *  moment of settlement, not at round end like the other three, and deliberately exempt from
+ *  WIN_MIN_ROUND (constants.ts) for the same reason the old eliminate-all-rivals Domination
+ *  path was: a decisive military result earns its ending whenever it lands. This supersedes
+ *  that old path outright (a single Capital is now enough, regardless of remaining player
+ *  count) — see selectors.ts's checkWinConditions, which no longer has an elimination clause. */
+export type WinCondition = 'VictoryPoints' | 'Domination' | 'HeroLevelRace' | 'CapitalConquest';
 
 export type GameStatus = 'lobby' | 'active' | 'finished';
 
@@ -631,6 +644,38 @@ export interface MoveSoldiersAction extends BaseAction {
   heroJoins?: boolean;
 }
 
+/** [DEFAULT — balance rework pass 4, new mechanic] Spends the Smithy's long-advertised-but-
+ *  never-implemented "crafts hero gear from Ore + Gold" line (§7.1) for real: the hero must be
+ *  standing on their own tile with a built Smithy, and pays SMITHY_CRAFT_COSTS[rarity]
+ *  (constants.ts) — carried-then-wallet, same §7.6 rule as any Build action targeting the
+ *  hero's current tile — to draw ONE LootCard at exactly that rarity from the same shared
+ *  lootDeck every other draw site pulls from (drawLoot, decks.ts), including its §5.3
+ *  exhaustion contract: a genuinely-empty rarity resolves the craft normally but empty-handed,
+ *  never throws. This is deliberately a Phase 5 FREE action (does NOT consume the turn's one
+ *  Build slot, §7) — like Deploy/Move Soldiers and Build Road, spending an already-built
+ *  structure shouldn't compete with constructing a new one, and letting it repeat every turn
+ *  resources allow is what makes it a genuine late-game Ore/Gold sink rather than a one-off. */
+export interface CraftGearAction extends BaseAction {
+  type: 'CraftGear';
+  coord: HexCoord;
+  rarity: LootRarity;
+}
+
+/** [DEFAULT — balance rework pass 4, new mechanic, direct request: "treasure / equipment has a
+ *  gold value like in Munchkin which can be sold for additional troops"] Sells one owned Loot
+ *  card (equipped or not — selling an equipped card unequips it as part of the sale) for a
+ *  number of Soldiers scaled to its rarity (LOOT_SELL_TROOPS, constants.ts — "higher level
+ *  equip = more troops"), added straight into a Barracks reserve. The hero must be standing on
+ *  their own tile with a built Barracks, same "must be at the specific building" pattern as
+ *  CraftGear — this is CraftGear's inverse, cashing gear back in rather than buying it, and
+ *  landing at the Barracks rather than the Smithy is the point: you're pawning equipment to fund
+ *  mercenaries, not smelting it. Phase 5, free — does NOT consume the turn's one Build slot. */
+export interface SellLootAction extends BaseAction {
+  type: 'SellLoot';
+  lootCardId: string;
+  coord: HexCoord;
+}
+
 export interface EquipLootAction extends BaseAction {
   type: 'EquipLoot';
   lootCardId: string;
@@ -679,6 +724,8 @@ export type Action =
   | MoveSoldiersAction
   | UpgradeBuildingAction
   | BuildRoadAction
+  | CraftGearAction
+  | SellLootAction
   | EquipLootAction
   | UnequipLootAction
   | TradeWithBankAction

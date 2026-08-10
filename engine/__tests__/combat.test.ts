@@ -118,7 +118,7 @@ describe('§6.2 Hero vs Hero — worked example reproduced, and tie favors defen
 describe('§6.3 Army vs Territory — structural invariants across many random rolls', () => {
   it('losses + remaining always equal the committed unit count, on both sides', () => {
     for (let c = 0; c < 300; c += 3) {
-      const outcome = resolveArmyVsTerritory(4, 3, false, new RngStream('army-seed', c));
+      const outcome = resolveArmyVsTerritory(4, 3, 0, new RngStream('army-seed', c));
       expect(outcome.attackerLosses + outcome.attackerRemaining).toBe(4);
       expect(outcome.defenderLosses + outcome.defenderRemaining).toBe(3);
     }
@@ -126,20 +126,20 @@ describe('§6.3 Army vs Territory — structural invariants across many random r
 
   it('tileCaptured is true iff defenderRemaining <= 0', () => {
     for (let c = 0; c < 300; c += 3) {
-      const outcome = resolveArmyVsTerritory(5, 5, false, new RngStream('capture-seed', c));
+      const outcome = resolveArmyVsTerritory(5, 5, 0, new RngStream('capture-seed', c));
       expect(outcome.tileCaptured).toBe(outcome.defenderRemaining <= 0);
     }
   });
 
   it('Watchtower bonus never pushes a defending die above the cap of 6', () => {
     for (let c = 0; c < 300; c += 3) {
-      const outcome = resolveArmyVsTerritory(3, 3, true, new RngStream('watchtower-seed', c));
+      const outcome = resolveArmyVsTerritory(3, 3, 1, new RngStream('watchtower-seed', c));
       for (const roll of outcome.defenderRolls) expect(roll).toBeLessThanOrEqual(6);
     }
   });
 
   it('an attacker with 0 defenders present always captures immediately', () => {
-    const outcome = resolveArmyVsTerritory(1, 0, false, new RngStream('empty-defense', 0));
+    const outcome = resolveArmyVsTerritory(1, 0, 0, new RngStream('empty-defense', 0));
     expect(outcome.tileCaptured).toBe(true);
     expect(outcome.defenderRemaining).toBe(0);
   });

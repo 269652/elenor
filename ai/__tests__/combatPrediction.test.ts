@@ -3,41 +3,41 @@ import { duelWinProbability, pairWinProbability, predictArmyVsTerritory, rollMee
 
 describe('pairWinProbability (§6.3 single die-vs-die pair)', () => {
   it('is exactly 15/36 without a Watchtower — enumerated, not approximated', () => {
-    expect(pairWinProbability(false)).toBeCloseTo(15 / 36, 10);
+    expect(pairWinProbability(0)).toBeCloseTo(15 / 36, 10);
   });
 
   it('is lower with a Watchtower (defender die effectively +1, capped at 6)', () => {
-    expect(pairWinProbability(true)).toBeLessThan(pairWinProbability(false));
+    expect(pairWinProbability(1)).toBeLessThan(pairWinProbability(0));
   });
 });
 
 describe('predictArmyVsTerritory (§6.3 expectation)', () => {
   it('capture is impossible in one engagement if attacker has fewer units than defender', () => {
-    const pred = predictArmyVsTerritory(2, 5, false);
+    const pred = predictArmyVsTerritory(2, 5, 0);
     expect(pred.captureProbability).toBe(0);
   });
 
   it('capture is certain against an undefended tile', () => {
-    const pred = predictArmyVsTerritory(3, 0, false);
+    const pred = predictArmyVsTerritory(3, 0, 0);
     expect(pred.captureProbability).toBe(1);
     expect(pred.expectedAttackerRemaining).toBe(3);
   });
 
   it('capture probability is exactly p^defendingUnits when attacker >= defender', () => {
-    const p = pairWinProbability(false);
-    const pred = predictArmyVsTerritory(4, 3, false);
+    const p = pairWinProbability(0);
+    const pred = predictArmyVsTerritory(4, 3, 0);
     expect(pred.captureProbability).toBeCloseTo(Math.pow(p, 3), 10);
   });
 
   it('a 0-unit attack never changes anything', () => {
-    const pred = predictArmyVsTerritory(0, 4, false);
+    const pred = predictArmyVsTerritory(0, 4, 0);
     expect(pred.captureProbability).toBe(0);
     expect(pred.expectedDefenderRemaining).toBe(4);
   });
 
   it('expected losses are symmetric with the win probability', () => {
-    const p = pairWinProbability(false);
-    const pred = predictArmyVsTerritory(5, 5, false);
+    const p = pairWinProbability(0);
+    const pred = predictArmyVsTerritory(5, 5, 0);
     expect(pred.expectedDefenderRemaining).toBeCloseTo(5 - 5 * p, 10);
     expect(pred.expectedAttackerRemaining).toBeCloseTo(5 - 5 * (1 - p), 10);
   });

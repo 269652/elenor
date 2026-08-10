@@ -24,6 +24,7 @@ live with friends over a shareable link.
 - [The economy — tiles, stockpiles, and hauling](#the-economy--tiles-stockpiles-and-hauling)
 - [Buildings](#buildings)
 - [The Town (Capital upgrades)](#the-town-capital-upgrades)
+- [The gear economy — Craft Gear and Sell Loot](#the-gear-economy--craft-gear-and-sell-loot)
 - [Roads — the logistics shortcut](#roads--the-logistics-shortcut)
 - [Heroes — classes, leveling, and gear](#heroes--classes-leveling-and-gear)
 - [The Munchkin layer — the Door deck](#the-munchkin-layer--the-door-deck)
@@ -124,27 +125,32 @@ collecting before anyone can industrialize.
 | Plains | Windmill *(needs a Farm)* | Converts 2 Food → 1 Gold/turn | 2 Stone + 2 Wood | Round 6 |
 | Plains | Cow Stable *(upgradable, →+5)* | +1 Meat/turn | 3 Food + 2 Wood | — |
 | Mountain | Mine | +1 Ore/turn | 2 Ore + 1 Stone | Round 3 |
-| Mountain | Smithy | Crafts hero gear | 3 Ore + 2 Stone | Round 5 |
+| Mountain | Smithy | Unlocks Craft Gear — see [the gear economy](#the-gear-economy--craft-gear-and-sell-loot) | 3 Ore + 2 Stone | Round 5 |
 | Desert | Trade Post | +1 Gold/turn; 2:1 bank trade | 2 Gold + 2 Stone | Round 3 |
 | River | Dock | Unlocks boat movement | 2 Wood + 1 Stone | Round 3 |
-| Any owned tile | Watchtower | +1 to each defending die (cap 6) in a territory fight | 2 Stone + 2 Ore | — |
-| Plains only | Barracks | Unlocks Soldier recruitment (see [Territory war](#territory-war-the-risk-layer)) | 3 Wood + 2 Ore + 5 Food | — |
+| Any owned tile | Watchtower *(upgradable, →+3, cap 8)* | +1 to each defending die (cap 6) in a territory fight | 2 Stone + 2 Ore | — |
+| Plains only | Barracks *(upgradable)* | Unlocks Soldier recruitment (see [Territory war](#territory-war-the-risk-layer)) | 3 Wood + 2 Ore + 5 Food | — |
 
-Farm, Quarry, and Cow Stable can each be upgraded — one Phase 5 action per tier, escalating cost:
+Farm, Quarry, Cow Stable, Watchtower, and Barracks can each be upgraded — one Phase 5 action per
+tier, escalating cost:
 
-| Building | Tiers | Final rate |
+| Building | Tiers | Final effect |
 |---|---|---|
 | Quarry | 3 (2 upgrades) | +3 Stone/turn |
 | Farm | 3 (2 upgrades) | +3 Food/turn |
 | Cow Stable | 5 (4 upgrades) | +5 Meat/turn |
+| Watchtower | 3 (2 upgrades) | +3 to each defending die, cap raised to 8 |
+| Barracks | 3 (2 upgrades) | Reserve cap 9→21; recruits up to 1 Soldier per owned tile/round (from 1 per 3) |
 
-The **Mage** class discounts every listed cost above by 1 of each resource (floor 1).
+A player may build more than one Barracks (one per owned Plains tile) and upgrade each
+independently — the bigger the empire, the bigger the army it can field *and* feed. The **Mage**
+class discounts every listed cost above (and every upgrade cost) by 1 of each resource (floor 1).
 
 ---
 
 ## The Town (Capital upgrades)
 
-Your Capital carries a free tier-1 Town from the moment you spawn. Four more tiers can be bought
+Your Capital carries a free tier-1 Town from the moment you spawn. Five more tiers can be bought
 as Phase 5 Build actions, each permanently raising your hero's Max HP and paying Victory Points:
 
 | Tier | Cost | Hero Max HP | VP |
@@ -154,6 +160,38 @@ as Phase 5 Build actions, each permanently raising your hero's Max HP and paying
 | 3 | 4 Stone + 3 Ore + 4 Food | +3 | +3 |
 | 4 | 5 Ore + 5 Gold | +3 | +4 |
 | 5 | 8 Gold + 6 Ore + 6 Stone | +5 | +6 |
+| 6 — **the Grand Bazaar** | 15 Wood + 12 Stone + 10 Ore + 15 Gold + 8 Food | +4 | +8 |
+
+Tier 6 is a late-game wonder capstone — one big, deliberately expensive sink spanning five of the
+six resources at once, for whenever the rest of the build tree is spent out and the wallet is
+still full.
+
+---
+
+## The gear economy — Craft Gear and Sell Loot
+
+Two free Phase 5 actions turn Loot into a resource sink and a source of Soldiers, on top of
+whatever a hero finds fighting.
+
+**Craft Gear**, at an owned Smithy: pay Ore + Gold for a **guaranteed** Loot card of the rarity you
+choose — the trade-off for skipping the dice entirely.
+
+| Rarity | Cost |
+|---|---|
+| Common | 3 Ore + 2 Gold |
+| Uncommon | 6 Ore + 4 Gold |
+| Rare | 10 Ore + 8 Gold |
+| Legendary | 16 Ore + 14 Gold |
+
+**Sell Loot**, at an owned Barracks — Craft Gear's inverse: cash in a Loot card (equipped or not)
+for Soldiers straight into that Barracks's reserve. Higher rarity = more troops:
+
+| Rarity sold | Soldiers granted |
+|---|---|
+| Common | 1 |
+| Uncommon | 2 |
+| Rare | 4 |
+| Legendary | 7 |
 
 ---
 
@@ -249,11 +287,12 @@ MoveSoldiers(fromCoord, toCoord, count)
 **Occupation, not conquest.** Winning a fight (or walking onto empty ground) only plants your troops.
 The tile only actually changes hands once your Soldiers have held it **uncontested for 3 full
 rounds** — giving the original owner real time to march back and fight for it. Until the claim
-lands, the tile still produces and still scores VP for its old owner. Taking a rival's Capital this
-way eliminates them from the game once the claim settles.
+lands, the tile still produces and still scores VP for its old owner. **Taking a rival's Capital
+this way wins the entire game, instantly** — see [Victory Points & winning](#victory-points--winning).
 
 **Recruiting an army.** A Barracks passively recruits `max(1, floor(ownedTiles / 3))` Soldiers per
-round into its own tile (capped at 9 in reserve), but only while you can afford your *current* army's
+round into its own tile (capped at 9 in reserve at tier 1 — both numbers improve with the Barracks's
+own upgrade tiers, see [Buildings](#buildings)), but only while you can afford your *current* army's
 upkeep — a starving Barracks stops recruiting rather than compounding the problem. **Deploy Soldiers**
 (free) moves fresh recruits from the Barracks out to the tile itself or one hex away; **Move
 Soldiers** (above) carries them the rest of the way and does the fighting.
@@ -296,19 +335,22 @@ Legendary Loot — a live running total, not a one-time award:
 |---|---|
 | Each owned tile | +1 |
 | Each constructed building | +1 |
-| Town tiers 1–5 | +1 / +2 / +3 / +4 / +6 |
+| Town tiers 1–6 | +1 / +2 / +3 / +4 / +6 / +8 |
 | Hero reaches Level 3 / 5 / 7 / 10 | +1 / +2 / +3 / +5 (once each) |
 | Each Legendary Loot card owned | +2 |
 
-Checked at the end of every round, three ways to win:
+Four ways to win:
 
-1. **Victory Points** — reach **120 VP**.
-2. **Domination** — control **60%** of all placed tiles, or eliminate every rival's Capital.
-3. **Hero Level Race** — any of your heroes reaches **Level 10**.
+1. **🏰 Capital Conquest** — the instant you capture ANY rival's Capital (the claim above finally
+   settling), **you win the whole game immediately** — no matter how many other players remain.
+   This is the fastest, most decisive path, and the only one not gated by the round floor below.
+2. **Victory Points** — reach **120 VP**.
+3. **Domination** — control **60%** of all placed tiles.
+4. **Hero Level Race** — any of your heroes reaches **Level 10**.
 
-None of these (except wiping out every rival) can trigger before **Round 12** — the floor exists so
-no lucky opening can end the game before the war and the hero layer ever come online. Ties are broken
-by highest VP, then by turn order.
+Conditions 2–4 can't trigger before **Round 12** — the floor exists so no lucky opening can end the
+game before the war and the hero layer ever come online. Ties among conditions 2–4 are broken by
+highest VP, then by turn order; Capital Conquest never ties (only one player can hold the claim).
 
 ---
 
@@ -351,7 +393,7 @@ Other scripts:
 npm run build   # production build
 npm run start   # run a production build
 npm run lint    # eslint
-npm run test    # vitest — 368 tests across 21 files, including exact reproductions of
+npm run test    # vitest — 393 tests across 22 files, including exact reproductions of
                  # docs/rules-reference.md's worked combat examples
 ```
 

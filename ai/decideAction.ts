@@ -12,15 +12,18 @@
  */
 
 import {
+  BARRACKS_TIERS,
   BUILDING_DEFINITIONS,
   CAPITAL_TIERS,
   GEAR_SLOT_COUNT,
   LEVEL_UP_COST,
+  LOOT_SELL_TROOPS,
   MIN_SOLDIERS_LEFT_BEHIND,
   MONSTER_THRESHOLD_OFFSET,
   Phase,
   RESOURCE_TYPES,
   ROAD_COST,
+  SMITHY_CRAFT_COSTS,
   TILE_RESOURCE,
   VOLCANO_MONSTER_LEVEL,
   applyMageDiscount,
@@ -43,6 +46,7 @@ import {
   tierOf,
   tileAt,
   totalCarried,
+  troopCapFor,
   type Action,
   type BuildingType,
   type GameEvent,
@@ -50,6 +54,7 @@ import {
   type HeroState,
   type HexCoord,
   type HexKey,
+  type LootRarity,
   type Player,
   type PlayerId,
   type ResourceCost,
@@ -496,13 +501,17 @@ function decideMove(state: GameState, player: Player): Action {
   // clear the HP/win-probability bar doesn't lure the hero away from exploring for nothing.
   const bestMarch = findBestTerritoryAttack(state, player.id);
   const warCallTarget = bestMarch && bestMarch.contested && heroWouldJoinIfPresent(state, player, bestMarch) ? bestMarch.fromCoord : null;
+  // [DEFAULT — balance rework pass 4] See findGearErrandTarget's doc comment — without this pull,
+  // considerCraftGear/considerSellLoot (decideBuild) would almost never actually fire, since
+  // nothing else routes the hero through its own Smithy/Barracks specifically.
+  const gearErrandTarget = findGearErrandTarget(state, player);
 
   let bestCoord = hero.position;
-  let bestScore = scoreDestination(state, player, hero.position, quest, connected, starving, wantsWoodForRoads, warCallTarget);
+  let bestScore = scoreDestination(state, player, hero.position, quest, connected, starving, wantsWoodForRoads, warCallTarget, gearErrandTarget);
   let bestPath: HexCoord[] = [];
 
   for (const { coord, path } of reachable) {
-    const s = scoreDestination(state, player, coord, quest, connected, starving, wantsWoodForRoads, warCallTarget);
+    const s = scoreDestination(state, player, coord, quest, connected, starving, wantsWoodForRoads, warCallTarget, gearErrandTarget);
     if (s > bestScore) {
       bestScore = s;
       bestCoord = coord;
@@ -561,6 +570,35 @@ function findQuestTarget(state: GameState, player: Player, valueScale = 1): Ques
   return best;
 }
 
+/** [DEFAULT — balance rework pass 4] Distance-decayed pull toward whichever gear-economy errand
+ *  (CraftGear at an owned Smithy, or SellLoot at an owned Barracks) is currently worth a special
+ *  trip — without this, considerCraftGear/considerSellLoot (decideBuild) only ever fire when the
+ *  hero happens to already be standing on the right tile for some OTHER reason, which a fresh
+ *  Smithy/Barracks would almost never see. Deliberately modest next to QUEST_BASE_VALUE (7) and
+ *  WAR_CALL_BASE_VALUE (6) — spending an Ore/Gold surplus or a Loot backlog is housekeeping, not
+ *  a reason to abandon an active quest or war call. */
+const GEAR_ERRAND_BASE_VALUE = 4;
+const GEAR_ERRAND_TRAVEL_COST = 1;
+
+function findGearErrandTarget(state: GameState, player: Player): HexCoord | null {
+  const hero = player.hero;
+  const isMage = classDefFor(player).startingBonus.kind === 'Mage';
+
+  // Wallet-only affordability check (coord: null) — a rough "worth the detour" signal; the real
+  // gate (combined with whatever the hero is carrying once they arrive) is considerCraftGear
+  // itself, at the Smithy.
+  const cheapestCraftCost = isMage ? applyMageDiscount(SMITHY_CRAFT_COSTS.Common) : SMITHY_CRAFT_COSTS.Common;
+  const smithy = canAffordCombined(player, hero, null, cheapestCraftCost) ? ownedSmithyTiles(state, player)[0] : undefined;
+
+  const unequippedCount = hero.inventory.filter((c) => !hero.equippedLootIds.includes(c.id)).length;
+  const barracks = unequippedCount > GEAR_SLOT_COUNT ? ownedBarracksTiles(state, player)[0] : undefined;
+
+  const candidates = [smithy?.coord, barracks?.coord].filter((c): c is HexCoord => !!c);
+  if (candidates.length === 0) return null;
+  // Closer of the two, if both apply — cheapest detour wins.
+  return candidates.reduce((a, b) => (hexDistance(hero.position, a) <= hexDistance(hero.position, b) ? a : b));
+}
+
 function scoreDestination(
   state: GameState,
   player: Player,
@@ -569,7 +607,8 @@ function scoreDestination(
   connected: Set<HexKey> = new Set(),
   starving = false,
   wantsWoodForRoads = false,
-  warCallTarget: HexCoord | null = null
+  warCallTarget: HexCoord | null = null,
+  gearErrandTarget: HexCoord | null = null
 ): number {
   const tile = tileAt(state, coord);
   if (!tile) return -Infinity;
@@ -616,6 +655,12 @@ function scoreDestination(
   // exists (the hero was almost never physically present to join a fight without it).
   if (warCallTarget) {
     const pull = WAR_CALL_BASE_VALUE - WAR_CALL_TRAVEL_COST * hexDistance(coord, warCallTarget);
+    if (pull > 0) score += pull;
+  }
+
+  // [DEFAULT — balance rework pass 4] See findGearErrandTarget's doc comment above decideMove.
+  if (gearErrandTarget) {
+    const pull = GEAR_ERRAND_BASE_VALUE - GEAR_ERRAND_TRAVEL_COST * hexDistance(coord, gearErrandTarget);
     if (pull > 0) score += pull;
   }
 
@@ -829,6 +874,15 @@ const BORDER_GARRISON_TARGET = 3;
  *  it, and free ground needs no dice. */
 const FRONTIER_GARRISON_TARGET = 2;
 
+/** [DEFAULT — balance rework pass 4] Capital-defense tuning for considerCapitalDefense below —
+ *  mirrors evaluate.ts's own CAPITAL_THREAT_RADIUS/CAPITAL_ADEQUATE_GARRISON so the AI's
+ *  decision to actually MOVE troops home agrees with the score that move is chasing. A rival
+ *  stack within this many hexes of the Capital is a live threat worth reacting to; the garrison
+ *  target scales with how big that stack is, capped so a single overwhelming army doesn't demand
+ *  literally the whole standing force come home. */
+const CAPITAL_DEFENSE_THREAT_RADIUS = 3;
+const CAPITAL_DEFENSE_TARGET_GARRISON_CAP = 8;
+
 /** [DEFAULT — territory rework] ONE Barracks, down from two. The second one only ever existed to
  *  fix a first that couldn't reach anybody — an obsolete problem, since troops now march from
  *  wherever they stand and a Barracks is purely a recruitment unlock. What a second one still
@@ -893,11 +947,16 @@ function decideBuild(state: GameState, player: Player): Action {
   // All of these are FREE actions — none consumes the Build slot — so they can fire on top of a
   // Build/LevelUp in the same turn. Each is separately bounded; see each one.
   //
-  // Order is deliberate. A border tile with an enemy stack already standing next to it is about
-  // to be walked onto, and an empty tile is taken with no dice at all, so shoring that up comes
-  // before anything optional. Then take/retake ground (the only decision here with real lookahead
-  // behind it), then top up the quiet stretches of border, then push fresh recruits out of the
-  // Barracks to wherever they're shortest.
+  // Order is deliberate. Capital defense goes first — Capital Conquest (§11) makes losing it an
+  // instant, whole-game loss, which outranks every other soldier decision below by construction.
+  // Then a border tile with an enemy stack already standing next to it, about to be walked onto;
+  // an empty tile is taken with no dice at all, so shoring that up comes before anything optional.
+  // Then take/retake ground (the only decision here with real lookahead behind it), then top up
+  // the quiet stretches of border, then push fresh recruits out of the Barracks to wherever
+  // they're shortest.
+  const capitalDefence = considerCapitalDefense(state, player);
+  if (capitalDefence) return capitalDefence;
+
   const urgentDefence = considerBorderReinforcement(state, player, true);
   if (urgentDefence) return urgentDefence;
 
@@ -909,6 +968,16 @@ function decideBuild(state: GameState, player: Player): Action {
 
   const deploy = considerDeploySoldiers(state, player);
   if (deploy) return deploy;
+
+  // [DEFAULT — balance rework pass 4] The gear economy, last — neither competes with anything
+  // above (soldier movement doesn't touch resources; these don't touch soldiers directly, only
+  // the reserve a sale tops up), so there's no ordering conflict, just two more free actions to
+  // take on top of everything else this turn if they're available.
+  const craft = considerCraftGear(state, player, earmark);
+  if (craft) return craft;
+
+  const sellLoot = considerSellLoot(state, player);
+  if (sellLoot) return sellLoot;
 
   return advance(player.id);
 }
@@ -925,6 +994,16 @@ function ownedBarracksTiles(state: GameState, player: Player): Tile[] {
   for (const coord of player.ownedTiles) {
     const tile = state.map[hexKey(coord)];
     if (tile?.building?.type === 'Barracks') tiles.push(tile);
+  }
+  return tiles;
+}
+
+/** [DEFAULT — balance rework pass 4] Same shape as ownedBarracksTiles above, for CraftGear. */
+function ownedSmithyTiles(state: GameState, player: Player): Tile[] {
+  const tiles: Tile[] = [];
+  for (const coord of player.ownedTiles) {
+    const tile = state.map[hexKey(coord)];
+    if (tile?.building?.type === 'Smithy') tiles.push(tile);
   }
   return tiles;
 }
@@ -1430,9 +1509,9 @@ function heroWouldJoinIfPresent(state: GameState, player: Player, best: Territor
   if (hero.hp / hero.maxHp < minHpFraction) return false;
 
   const targetTile = tileAt(state, best.targetCoord);
-  const hasWatchtower = targetTile?.building?.type === 'Watchtower';
+  const watchtowerTier = targetTile?.building?.type === 'Watchtower' ? tierOf(targetTile.building) : 0;
   const heroFlatMod = hero.level + hero.attack + gearBonus(hero);
-  const winProb = heroPairWinProbability(heroFlatMod, hasExtraCombatDie(player), hasWatchtower);
+  const winProb = heroPairWinProbability(heroFlatMod, hasExtraCombatDie(player), watchtowerTier);
   return winProb >= HERO_JOIN_MIN_WIN_PROBABILITY;
 }
 
@@ -1440,6 +1519,61 @@ function heroShouldJoinMarch(state: GameState, player: Player, best: TerritoryAt
   if (!best.contested) return false; // undefended ground rolls no dice — nothing for the hero to join
   if (hexKey(player.hero.position) !== hexKey(best.fromCoord)) return false; // engine requires physical presence on fromCoord
   return heroWouldJoinIfPresent(state, player, best);
+}
+
+/** [DEFAULT — balance rework pass 4, new] Capital Conquest (§11) makes losing the Capital an
+ *  INSTANT, game-ending loss — so checking whether it's adequately garrisoned against a nearby
+ *  threat, and pulling troops IN from an adjacent tile if not, now outranks every other soldier
+ *  movement this turn, including the urgent border-reinforcement pass below.
+ *
+ *  This is deliberately the one place in the whole AI that moves troops BACKWARD/INWARD rather
+ *  than only forward/outward — considerBorderReinforcement is explicitly interior -> border,
+ *  never the reverse, and a live simulation confirmed that gap in practice: garrisons split
+ *  anywhere from 0% to 94% home per player, with no consistent doctrine, because nothing in the
+ *  AI's toolkit could ever pull troops home once they'd been pushed to a frontier.
+ *
+ *  Same one-hop-per-call shape as considerBorderReinforcement (a source more than one hex away
+ *  relays home over several turns, since a march only ever covers one hex — §6.3) and the same
+ *  "only react to a REAL, nearby threat" gate evaluate.ts's capitalGarrison weight uses, so this
+ *  never degenerates into permanent turtling once the Capital is already safe. */
+function considerCapitalDefense(state: GameState, player: Player): Action | null {
+  if (marchesThisTurn(state, player.id) >= MAX_MARCHES_PER_TURN) return null;
+
+  const capitalCoord = player.capitalTile;
+  const capitalTile = state.map[hexKey(capitalCoord)];
+  if (!capitalTile) return null;
+  const capitalGarrisonOwner = garrisonOwnerOf(capitalTile);
+  // A rival garrison already standing on our Capital isn't a reinforcement problem, it's an
+  // active invasion — considerTerritoryMarch's recapture path handles marching back onto our own
+  // occupied ground; walking more troops "in" here would just be an attack on our own tile.
+  if (capitalGarrisonOwner !== null && capitalGarrisonOwner !== player.id) return null;
+  const present = capitalGarrisonOwner === player.id ? capitalTile.militiaCount ?? 0 : 0;
+
+  let threat = 0;
+  for (const tile of Object.values(state.map)) {
+    const garrison = garrisonOwnerOf(tile);
+    if (!garrison || garrison === player.id) continue;
+    if (hexDistance(tile.coord, capitalCoord) > CAPITAL_DEFENSE_THREAT_RADIUS) continue;
+    threat = Math.max(threat, tile.militiaCount ?? 0);
+  }
+  if (threat <= 0) return null; // nothing nearby worth pulling troops home for right now
+
+  const target = Math.min(threat + 1, CAPITAL_DEFENSE_TARGET_GARRISON_CAP);
+  if (present >= target) return null; // already adequately defended for the threat that exists
+
+  for (const fromCoord of hexNeighbors(capitalCoord)) {
+    const fromTile = state.map[hexKey(fromCoord)];
+    if (!fromTile || fromTile.ownerId !== player.id) continue;
+    if (garrisonOwnerOf(fromTile) !== player.id) continue;
+    // Never strip a tile mid-occupation — its own claim would reset (claimHeldTerritory).
+    if (fromTile.ownerId !== player.id && fromTile.occupationSinceRound !== undefined) continue;
+    const available = Math.max(0, (fromTile.militiaCount ?? 0) - MIN_SOLDIERS_LEFT_BEHIND);
+    if (available <= 0) continue;
+    const count = Math.min(available, target - present);
+    if (count <= 0) continue;
+    return { type: 'MoveSoldiers', actorId: player.id, fromCoord, toCoord: capitalCoord, count };
+  }
+  return null;
 }
 
 /** [DEFAULT — territory rework] The designer's picture, implemented: "alongside the border, where
@@ -1490,8 +1624,10 @@ function considerBorderReinforcement(state: GameState, player: Player, urgentOnl
 /** [DEFAULT — balance rework, supersedes the old considerBuyMilitia; retargeted for the territory
  *  rework] Soldiers are not purchased — a Barracks passively fills a reserve at its own tile — so
  *  this only redeploys that reserve. DeploySoldiers is a free action (doesn't consume the one
- *  Build slot, §7.3) and can send a stack to ANY owned tile in one step, which makes it the AI's
- *  long-range logistics: MoveSoldiers walks one hex at a time, this teleports across the empire.
+ *  Build slot, §7.3). [DEFAULT — direct report, corrected here] It reaches only the Barracks
+ *  tile itself or one hex out, the same physical reach as a MoveSoldiers march — NOT "any owned
+ *  tile in one step" as an earlier version of this comment claimed; see the BUG FIX note on
+ *  neediestGarrisonDestination below for why that changed.
  *
  *  The old version's central worry — "deploying is a one-way trip that permanently disarms the
  *  soldier, because attacks may only be launched FROM a Barracks" — is obsolete. Troops now march
@@ -1596,6 +1732,70 @@ function neediestGarrisonDestination(
   }
   if (!relay || relay.distance === Infinity) return null; // no rival on the map yet — nothing to march toward
   return { coord: relay.coord, want: FRONTIER_GARRISON_TARGET };
+}
+
+// ── Gear economy: CraftGear and SellLoot [DEFAULT — balance rework pass 4, new mechanics] ─────
+
+/** [DEFAULT — balance rework pass 4, new mechanic] Spends surplus Ore+Gold at an owned Smithy for
+ *  a guaranteed Loot card (CraftGearAction) — one of the AI's new Ore/Gold sinks alongside
+ *  Barracks/Watchtower upgrades, and the direct answer to those two resources having no
+ *  meaningful late-game demand otherwise. Tries the HIGHEST rarity first: a guaranteed card is
+ *  worth spending up for when the wallet allows it, rather than defaulting to the cheapest
+ *  option every time. Respects the Barracks earmark (if any) the same way an ordinary building
+ *  purchase does, so gear shopping never competes with actually affording an army. */
+function considerCraftGear(state: GameState, player: Player, earmark: ResourceCost | null): Action | null {
+  const hero = player.hero;
+  const smithy = ownedSmithyTiles(state, player).find((t) => samePos(hero.position, t.coord));
+  if (!smithy) return null;
+
+  const isMage = classDefFor(player).startingBonus.kind === 'Mage';
+  const rarityOrder: LootRarity[] = ['Legendary', 'Rare', 'Uncommon', 'Common'];
+  for (const rarity of rarityOrder) {
+    const cost = isMage ? applyMageDiscount(SMITHY_CRAFT_COSTS[rarity]) : SMITHY_CRAFT_COSTS[rarity];
+    if (!canAffordCombined(player, hero, smithy.coord, cost)) continue;
+    if (earmark && !respectsBarracksEarmark(player, smithy.coord, cost, earmark)) continue;
+    return { type: 'CraftGear', actorId: player.id, coord: smithy.coord, rarity };
+  }
+  return null;
+}
+
+const LOOT_RARITY_ORDER: LootRarity[] = ['Common', 'Uncommon', 'Rare', 'Legendary'];
+
+/** [DEFAULT — balance rework pass 4, new mechanic, direct request: "treasure/equipment has a
+ *  gold value like in Munchkin which can be sold for additional troops"] Cashes in a surplus,
+ *  UNEQUIPPED Loot card for Soldiers at an owned Barracks (SellLootAction) — CraftGear's inverse.
+ *  Deliberately never sells anything currently EQUIPPED (that's real combat power, not surplus)
+ *  and only fires once there's a genuine backlog — more unequipped cards than the hero could even
+ *  use if every gear slot opened up (GEAR_SLOT_COUNT) — so a fresh Monster-kill trophy is never
+ *  sold the same turn it's won. Sells the LOWEST rarity in the backlog first: a Common trades
+ *  for troops far more readily than it would ever get equipped over something better, whereas a
+ *  Legendary is worth holding for its own combat value unless the backlog runs deep. */
+function considerSellLoot(state: GameState, player: Player): Action | null {
+  const hero = player.hero;
+  const unequipped = hero.inventory.filter((c) => !hero.equippedLootIds.includes(c.id));
+  if (unequipped.length <= GEAR_SLOT_COUNT) return null;
+
+  const barracks = ownedBarracksTiles(state, player).find((t) => samePos(hero.position, t.coord));
+  if (!barracks) return null;
+  if (garrisonOwnerOf(barracks) !== null && garrisonOwnerOf(barracks) !== player.id) return null; // occupied — engine would reject
+
+  // [BUG FIX] Mirror applySellLoot's own room check (reducers.ts) — without it, the AI proposed
+  // a sale the engine would reject outright once the Barracks reserve or the player's troop cap
+  // was already full, which a full-game integration run caught as a genuine IllegalActionError,
+  // not just a missed opportunity.
+  const barracksTier = BARRACKS_TIERS[Math.min(tierOf(barracks.building!), BARRACKS_TIERS.length) - 1] ?? BARRACKS_TIERS[0];
+  const currentArmy = ownedSoldierCount(state, player.id);
+  const waterTiles = player.ownedTiles.filter((c) => {
+    const t = state.map[hexKey(c)];
+    return !!t && effectiveTileType(t) === 'River';
+  }).length;
+  const roomUnderTroopCap = Math.max(0, troopCapFor(waterTiles) - currentArmy);
+  const roomUnderReserveCap = Math.max(0, barracksTier.reserveCap - (barracks.militiaCount ?? 0));
+  if (Math.min(roomUnderTroopCap, roomUnderReserveCap) <= 0) return null;
+
+  const card = [...unequipped].sort((a, b) => LOOT_RARITY_ORDER.indexOf(a.rarity) - LOOT_RARITY_ORDER.indexOf(b.rarity))[0];
+  if (!card) return null;
+  return { type: 'SellLoot', actorId: player.id, lootCardId: card.id, coord: barracks.coord };
 }
 
 /** Is a rival's stack of soldiers standing one hex from here, i.e. one march away from walking

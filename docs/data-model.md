@@ -245,10 +245,15 @@ export interface BuildingDefinition {
   minRound?: number;
   /** Ordered list of the tiers ABOVE tier 1, each bought by one UpgradeBuildingAction:
    *  `upgrades[0]` takes the building from tier 1 to tier 2, `upgrades[1]` from 2 to 3, and so on
-   *  — a definition with 4 entries tops out at tier 5. Only Farm/Quarry/CowStable define this;
-   *  everything else stays single-tier. Balance rework pass 2 replaced a single
-   *  `upgrade?: { cost, produceAmount }` object with this array. */
-  upgrades?: { cost: ResourceCost; produceAmount: number }[];
+   *  — a definition with 4 entries tops out at tier 5. Farm/Quarry/CowStable define this for
+   *  resource production; Watchtower/Barracks (balance rework pass 4) also define it for their
+   *  own non-resource per-tier effects (defense bonus, reserve cap — see WATCHTOWER_TIERS/
+   *  BARRACKS_TIERS in `engine/constants.ts`, the actual source of truth for those, keyed by the
+   *  same `Building.tier` this array's index advances) — which is why `produceAmount` below is
+   *  optional rather than required: present for the resource-producing trio, omitted for the
+   *  other two. Balance rework pass 2 replaced a single `upgrade?: { cost, produceAmount }`
+   *  object with this array. */
+  upgrades?: { cost: ResourceCost; produceAmount?: number }[];
   effectDescription: string;
 }
 ```
@@ -575,7 +580,12 @@ export interface GameEvent {
 
 export type GameMode = 'realtime' | 'async' | 'hotseat';
 
-export type WinCondition = 'VictoryPoints' | 'Domination' | 'HeroLevelRace';
+/** [DEFAULT — balance rework pass 4] 'CapitalConquest' added: the instant ANY rival's Capital
+ *  tile's occupation claim settles in a player's favor, that player wins immediately — checked
+ *  and set at the moment of settlement (`engine/reducers.ts`'s `claimHeldTerritory`), not at
+ *  round end like the other three, and exempt from `WIN_MIN_ROUND`. Supersedes the old
+ *  eliminate-all-rivals Domination trigger outright — see Rules Reference §11. */
+export type WinCondition = 'VictoryPoints' | 'Domination' | 'HeroLevelRace' | 'CapitalConquest';
 
 export interface GameState {
   gameId: string;
@@ -897,6 +907,34 @@ export interface UpgradeBuildingAction extends BaseAction {
   coord: HexCoord; // owned tile with an upgradable building, not already at max tier
 }
 
+/** [DEFAULT — balance rework pass 4, new mechanic] Spends `SMITHY_CRAFT_COSTS[rarity]`
+ *  (`engine/constants.ts`) — Ore + Gold, scaled steeply by rarity — to draw ONE guaranteed-rarity
+ *  LootCard from the shared `lootDeck`, subject to the same §5.3/§9 exhaustion contract every
+ *  other draw site follows (a genuinely empty rarity still spends the resources but resolves
+ *  empty-handed, never throws). The hero must be standing on their own tile with a built Smithy.
+ *  Phase 5, free — like DeploySoldiers/MoveSoldiers/BuildRoad, does NOT consume the turn's one
+ *  Build slot, so it can repeat every turn the wallet allows. Rules Reference §7.1c. */
+export interface CraftGearAction extends BaseAction {
+  type: 'CraftGear';
+  coord: HexCoord;
+  rarity: LootRarity;
+}
+
+/** [DEFAULT — balance rework pass 4, new mechanic, direct request: "treasure/equipment has a
+ *  gold value like in Munchkin which can be sold for additional troops"] CraftGearAction's
+ *  inverse: sells one owned Loot card (equipped or not — an equipped card is unequipped as part
+ *  of the sale) for `LOOT_SELL_TROOPS[rarity]` Soldiers, granted straight into an owned
+ *  Barracks's reserve — "higher level equip = more troops." The hero must be standing on that
+ *  Barracks tile; the grant is clamped by the Barracks's own tier reserve cap and the player's
+ *  overall `troopCapFor` the same way ordinary recruitment is, and rejected outright (not
+ *  silently truncated) if there's no room for even one Soldier. Phase 5, free. Rules Reference
+ *  §7.1c. */
+export interface SellLootAction extends BaseAction {
+  type: 'SellLoot';
+  lootCardId: string;
+  coord: HexCoord;
+}
+
 export interface EquipLootAction extends BaseAction {
   type: 'EquipLoot';
   lootCardId: string;
@@ -945,6 +983,8 @@ export type Action =
   | MoveSoldiersAction
   | UpgradeBuildingAction
   | BuildRoadAction
+  | CraftGearAction
+  | SellLootAction
   | EquipLootAction
   | UnequipLootAction
   | TradeWithBankAction

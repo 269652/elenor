@@ -173,8 +173,8 @@ function toBuildPhase(state: GameState): GameState {
 
 const COMBAT_SEED = 'territory-seed';
 
-function outcomeAt(cursor: number, attackers: number, defenders: number, watchtower = false) {
-  return resolveArmyVsTerritory(attackers, defenders, watchtower, new RngStream(COMBAT_SEED, cursor));
+function outcomeAt(cursor: number, attackers: number, defenders: number, watchtowerTier = 0) {
+  return resolveArmyVsTerritory(attackers, defenders, watchtowerTier, new RngStream(COMBAT_SEED, cursor));
 }
 
 function findCursor(predicate: (cursor: number) => boolean, label: string): number {
@@ -407,7 +407,7 @@ describe('MoveSoldiers: marching onto a DEFENDED tile resolves §6.3 combat imme
     const attackers = 3;
     const defenders = 3;
     const cursor = findCursor(
-      (c) => outcomeAt(c, attackers, defenders, false).tileCaptured && !outcomeAt(c, attackers, defenders, true).tileCaptured,
+      (c) => outcomeAt(c, attackers, defenders, 0).tileCaptured && !outcomeAt(c, attackers, defenders, 1).tileCaptured,
       'watchtower flips a capture into a repulse'
     );
     const state = borderFixture({
@@ -573,6 +573,45 @@ describe('Claiming a Capital eliminates its owner', () => {
     expect(playerIn(p2Turn, 'p2').isEliminated).toBe(false);
     expect(eventsOfType(p2Turn, 'PlayerEliminated')).toHaveLength(0);
     expect(tileAt(p2Turn, P2_CAPITAL)!.ownerId).toBe('p2');
+  });
+
+  // ── Capital Conquest — instant win [DEFAULT — balance rework pass 4, new] ─────────────────
+  describe('Capital Conquest — claiming a rival Capital wins the whole game immediately', () => {
+    it('sets winnerId/winCondition/status the instant the claim settles, not merely eliminating', () => {
+      const state = borderFixture({ p1BorderMilitia: 7 });
+      let s = applyAction(state, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P1_BORDER, toCoord: P2_BORDER, count: 6 });
+      s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
+      expect(s.winnerId).toBeNull(); // not yet — the claim hasn't landed
+
+      const next = advanceClaimWindow(s, 'p1');
+      expect(next.winnerId).toBe('p1');
+      expect(next.winCondition).toBe('CapitalConquest');
+      expect(next.status).toBe('finished');
+      const ended = eventsOfType(next, 'GameEnded');
+      expect(ended).toHaveLength(1);
+      expect(ended[0].payload).toMatchObject({ winnerId: 'p1', winCondition: 'CapitalConquest' });
+    });
+
+    it('is exempt from WIN_MIN_ROUND — fires however early the claim can genuinely settle', () => {
+      // TERRITORY_CLAIM_ROUNDS itself (3) already puts the settle round well under WIN_MIN_ROUND
+      // (12) starting from round 5 — no special-casing needed to prove the exemption; if this
+      // were gated the same way VP/Domination/HeroLevelRace are, it would NOT have fired yet.
+      const state = borderFixture({ p1BorderMilitia: 7, state: { roundNumber: 2 } });
+      let s = applyAction(state, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P1_BORDER, toCoord: P2_BORDER, count: 6 });
+      s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
+      const next = advanceClaimWindow(s, 'p1');
+      expect(next.roundNumber).toBeLessThan(12);
+      expect(next.winnerId).toBe('p1');
+      expect(next.winCondition).toBe('CapitalConquest');
+    });
+
+    it('once won, no further action is legal — the game has genuinely ended', () => {
+      const state = borderFixture({ p1BorderMilitia: 7 });
+      let s = applyAction(state, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P1_BORDER, toCoord: P2_BORDER, count: 6 });
+      s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
+      const next = advanceClaimWindow(s, 'p1');
+      expect(() => applyAction(next, { type: 'AdvancePhase', actorId: next.currentPlayerId })).toThrow(IllegalActionError);
+    });
   });
 });
 

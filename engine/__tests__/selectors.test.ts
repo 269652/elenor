@@ -97,12 +97,18 @@ describe('§11 Win condition trigger check', () => {
     expect(result?.winCondition).toBe('Domination');
   });
 
-  it('eliminating the only rival always wins Domination, even on a tiny board', () => {
+  it('REGRESSION — checkWinConditions no longer awards Domination from isEliminated alone (balance rework pass 4)', () => {
+    // [DEFAULT — balance rework pass 4] The old "every rival eliminated" Domination clause is
+    // gone — a single captured Capital now wins the WHOLE GAME immediately via Capital Conquest
+    // (reducers.ts's claimHeldTerritory, checked and set at the moment the claim settles), which
+    // strictly supersedes it: by the time every rival could ever be eliminated, the very first
+    // one already ended the match. See engine/__tests__/territory.test.ts for Capital Conquest's
+    // own coverage of the real trigger path (a marched-in garrison actually holding the tile
+    // through TERRITORY_CLAIM_ROUNDS), which this file intentionally does not re-test — a raw
+    // isEliminated:true fixture with no actual capture is a stale test setup, not the real thing.
     const p1 = makePlayer({ id: 'p1', ownedTiles: [{ q: 0, r: 0 }] });
     const p2 = makePlayer({ id: 'p2', ownedTiles: [{ q: 1, r: 0 }], isEliminated: true });
-    const result = checkWinConditions(fixtureState([p1, p2]));
-    expect(result?.winnerId).toBe('p1');
-    expect(result?.winCondition).toBe('Domination');
+    expect(checkWinConditions(fixtureState([p1, p2]))).toBeNull();
   });
 
   it('hero reaching Level 10 triggers HeroLevelRace', () => {
@@ -182,21 +188,14 @@ describe('§11 WIN_MIN_ROUND floor (balance rework)', () => {
     expect(checkWinConditions(fixtureState(players, { roundNumber: WIN_MIN_ROUND }))?.winCondition).toBe('Domination');
   });
 
-  it('REGRESSION — eliminating every rival still wins immediately, exempt from WIN_MIN_ROUND', () => {
-    // This exemption is deliberate (see constants.ts's WIN_MIN_ROUND and selectors.ts's
-    // checkWinConditions): once nobody is left to play against, there is no mid-game left to
-    // protect. Do not "fix" this by folding the elimination path back under pastMinRound.
+  it('REGRESSION — checkWinConditions stays null for an isEliminated-only fixture even at round 1 (balance rework pass 4)', () => {
+    // [DEFAULT — balance rework pass 4] Superseded by Capital Conquest, same as the test above —
+    // this used to assert the old WIN_MIN_ROUND-exempt elimination win; that exemption now
+    // belongs to Capital Conquest itself (checked outside this function entirely, in
+    // reducers.ts's claimHeldTerritory, and genuinely unconditional on round number there).
     const p1 = makePlayer({ id: 'p1', ownedTiles: [{ q: 0, r: 0 }] });
     const p2 = makePlayer({ id: 'p2', ownedTiles: [{ q: 1, r: 0 }], isEliminated: true });
-    const result = checkWinConditions(fixtureState([p1, p2], { roundNumber: 1 }));
-    expect(result).toEqual({ winnerId: 'p1', winCondition: 'Domination' });
-  });
-
-  it('the elimination exemption holds in a multi-seat game with one survivor', () => {
-    const p1 = makePlayer({ id: 'p1', ownedTiles: [{ q: 0, r: 0 }] });
-    const p2 = makePlayer({ id: 'p2', ownedTiles: [{ q: 1, r: 0 }], isEliminated: true });
-    const p3 = makePlayer({ id: 'p3', ownedTiles: [{ q: 2, r: 0 }], isEliminated: true });
-    expect(checkWinConditions(fixtureState([p1, p2, p3], { roundNumber: 2 }))?.winnerId).toBe('p1');
+    expect(checkWinConditions(fixtureState([p1, p2], { roundNumber: 1 }))).toBeNull();
   });
 
   it('one surviving player among several still-active rivals is NOT an elimination win', () => {
@@ -211,8 +210,10 @@ describe('Building tier helpers (balance rework)', () => {
   const cowStable = BUILDING_DEFINITIONS.CowStable;
   const farm = BUILDING_DEFINITIONS.Farm;
   const quarry = BUILDING_DEFINITIONS.Quarry;
-  const sawmill = BUILDING_DEFINITIONS.Sawmill;
-  const watchtower = BUILDING_DEFINITIONS.Watchtower; // no producesResource/produceAmount at all
+  const sawmill = BUILDING_DEFINITIONS.Sawmill; // no producesResource/upgrades either — genuinely single-tier
+  // [DEFAULT — balance rework pass 4] Watchtower/Barracks gained their own upgrade tracks
+  // (WATCHTOWER_TIERS/BARRACKS_TIERS, constants.ts) — no longer a "no upgrades" example.
+  const watchtower = BUILDING_DEFINITIONS.Watchtower;
 
   describe('maxTierFor', () => {
     it('is 1 + the number of upgrade entries', () => {
@@ -225,7 +226,11 @@ describe('Building tier helpers (balance rework)', () => {
     it('is 1 for a definition with no upgrades at all', () => {
       expect(sawmill.upgrades).toBeUndefined();
       expect(maxTierFor(sawmill)).toBe(1);
-      expect(maxTierFor(watchtower)).toBe(1);
+    });
+
+    it('is 1 + the number of upgrade entries for Watchtower/Barracks too (balance rework pass 4)', () => {
+      expect(maxTierFor(watchtower)).toBe(3);
+      expect(maxTierFor(BUILDING_DEFINITIONS.Barracks)).toBe(3);
     });
   });
 
@@ -293,7 +298,12 @@ describe('Building tier helpers (balance rework)', () => {
 
     it('returns null for a definition with no upgrades at all', () => {
       expect(nextUpgradeFor(sawmill, 1)).toBeNull();
-      expect(nextUpgradeFor(watchtower, 1)).toBeNull();
+    });
+
+    it('advances Watchtower/Barracks through their own tiers too (balance rework pass 4)', () => {
+      expect(nextUpgradeFor(watchtower, 1)).not.toBeNull();
+      expect(nextUpgradeFor(watchtower, 3)).toBeNull(); // maxed
+      expect(nextUpgradeFor(BUILDING_DEFINITIONS.Barracks, 1)).not.toBeNull();
     });
 
     it("each entry's produceAmount matches produceAmountForTier at the tier it unlocks", () => {

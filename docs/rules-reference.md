@@ -174,6 +174,38 @@ Untagged prose is structural/procedural (how systems connect), derived directly 
 >    because those were never the hero's to lose in the first place. See §6.3c, and
 >    `docs/game-design.md` §6 for why the trade-off is shaped this way.
 
+> **Changelog — balance rework pass 4: late-game depth + Capital Conquest (post-launch, supersedes
+> §7.1/§7.1a/§7.3/§10/§11 below wherever they conflict):** a live 4-seed simulation confirmed Wood
+> (and to a lesser extent Stone, Ore, and Gold) had no meaningful late-game sink — a mature economy's
+> tile+building production simply outran every one-time build cost, and winners routinely finished
+> with 200–700+ idle Wood. Separately, the direct brief was: *"make it so that conquering the capital
+> of another player is a win condition,"* confirmed as an **instant win for the conqueror** — the
+> moment ANY rival's Capital claim settles, the whole game ends right there, regardless of remaining
+> player count — plus *"AI should also be adapted so that protecting capital and borders with troops
+> is properly scored,"* and, mid-pass, *"treasure/equipment has a gold value like in Munchkin which
+> can be sold for additional troops — higher level equip = more troops."* Five changes, each tagged
+> **[DEFAULT — balance rework pass 4]** at the point it applies below:
+>
+> 1. **Watchtower and Barracks each gained a 3-tier upgrade track** (§7.1a), a real Stone+Ore(+Wood)
+>    and Wood+Ore+Food sink respectively that also raises a Watchtower's defending-die bonus (+1/+2/+3,
+>    cap 6/6/8) and a Barracks's reserve cap and recruiting rate — directly aimed at both the idle-
+>    resource problem and "defend your borders" now having something concrete to build toward.
+> 2. **The Town gained a 6th tier, "the Grand Bazaar"** (§7.3/§10) — a late-game wonder capstone
+>    spending a broad spread of Wood/Stone/Ore/Gold/Food at once for a large one-time VP payout,
+>    reusing the existing Capital-tier mechanism rather than a new building (a separate BuildingType
+>    restricted to the Capital tile would collide with the Town structure already occupying that
+>    tile's one building slot).
+> 3. **The Smithy's long-promised "crafts hero gear from Ore + Gold" is now real** (new §7.1c) — a
+>    `CraftGear` free action drawing a guaranteed-rarity Loot card from the shared pool for a rarity-
+>    scaled Ore+Gold cost, the biggest single sink either resource has.
+> 4. **A new `SellLoot` free action is CraftGear's inverse** (§7.1c) — sells a Loot card at a Barracks
+>    for Soldiers, scaled by rarity (Common→1 up to Legendary→7), so a hero's trophy case doubles as
+>    an army reserve when that's worth more than the gear itself.
+> 5. **Capital Conquest is a new, 4th win condition** (§11) — instant, unconditional on remaining
+>    player count, and exempt from `WIN_MIN_ROUND` the same way the old "eliminate every rival"
+>    Domination clause was — which it replaces outright: a single captured Capital is enough now, so
+>    Domination's elimination sub-path is gone (the 60%-tile-share path is untouched).
+
 ---
 
 ## 1. Setup
@@ -1263,12 +1295,12 @@ for the round each building unlocks.
 | Plains | Windmill (requires Farm built first) | Converts 2 Food into 1 Gold/turn; not before Round 6 § | 2 Stone + 2 Wood |
 | Plains | Cow Stable ‡ | +1 Meat/turn at tier 1 (feeds Soldier Upkeep, §6.3a); upgradable through tier 5 to +5/turn (§7.1a) † | 3 Food + 2 Wood |
 | Mountain | Mine | +1 Ore/turn; not before Round 3 § | 2 Ore + 1 Stone |
-| Mountain | Smithy | Crafts hero gear from Ore + Gold; not before Round 5 § | 3 Ore + 2 Stone |
+| Mountain | Smithy | Crafts hero gear from Ore + Gold via `CraftGear` (§7.1c) — real as of balance rework pass 4; not before Round 5 § | 3 Ore + 2 Stone |
 | Desert | Trade Post | +1 Gold/turn; unlocks 2:1 bank trade instead of default 4:1; not before Round 3 § | 2 Gold + 2 Stone |
 | River | Dock | Unlocks boat movement; not before Round 3 §; produces no resource — see §6.3b for what a River tile is actually worth ¤ | 2 Wood + 1 Stone |
-| Any owned tile | Watchtower | +1 to each defending die (cap 6) in territory combat, for whoever is holding the tile (§6.3) | 2 Stone + 2 Ore |
-| Plains only ‡ | Barracks | **Unlocks Soldier recruitment, and nothing else.** Recruits `max(1, floor(ownedTiles / 3))` Soldiers/round into its own tile, capped at 9 and only while the current army's upkeep is affordable (§6.3); move them out with Deploy Soldiers (interior) or Move Soldiers (the frontier). Confers **no** attack privilege and no adjacency rule ¶ | 3 Wood + 2 Ore + 5 Food ‡ |
-| Starting tile only | Capital upgrade (the Town) | Increases hero max HP every tier — tier 1 is free, granted at spawn; see §7.3 | Cost scales with tier |
+| Any owned tile | Watchtower | +1 to each defending die (cap 6) in territory combat, for whoever is holding the tile (§6.3); upgradable through tier 3 to +3 (cap 8) (§7.1a) ** | 2 Stone + 2 Ore |
+| Plains only ‡ | Barracks | **Unlocks Soldier recruitment, and nothing else.** Recruits `max(1, floor(ownedTiles / tilesPerSoldier))` Soldiers/round into its own tile (capped at its tier's reserve cap) and only while the current army's upkeep is affordable (§6.3); move them out with Deploy Soldiers (interior) or Move Soldiers (the frontier). Confers **no** attack privilege and no adjacency rule ¶; upgradable through tier 3 for a bigger reserve and faster recruiting (§7.1a) ** | 3 Wood + 2 Ore + 5 Food ‡ |
+| Starting tile only | Capital upgrade (the Town) | Increases hero max HP every tier — tier 1 is free, granted at spawn; 6 tiers total as of balance rework pass 4 (tier 6, "the Grand Bazaar," is a late-game wonder capstone); see §7.3 | Cost scales with tier |
 
 **Roads** are not in this table because they are not buildings — they sit on a tile *edge*, not on a
 tile, cost a flat 1 Wood, and are not a Phase-5 action. See §7.7.
@@ -1294,6 +1326,11 @@ rather than being a flat +3 — see §6.3.
 ¤ **[DEFAULT — troop cap rework]** Dock used to also produce +1 Food/turn; that was dropped when
 River's economic role moved entirely to raising the troop cap (§1/§2a's `TILE_RESOURCE.River = null`;
 §6.3b). Building a Dock is purely about reach (boat movement) now, not income.
+** **[DEFAULT — balance rework pass 4]** Watchtower and Barracks each gained their own 3-tier
+upgrade track — see §7.1a for the exact costs and resulting rates. Both were previously single-tier;
+a mature economy having no meaningful sink for Stone/Ore(/Wood) or Wood/Ore/Food was the direct
+motivation, alongside giving "defend your borders" and "field a bigger army" something concrete to
+build toward.
 
 ### 7.1a Building Upgrade Tracks
 
@@ -1349,6 +1386,30 @@ discount (§7.2) the same way, applied per step. A building already at its track
 with no upgrade track defined at all, cannot be targeted. Upgrading is NOT round-gated: §7.1b's
 `minRound` governs when a building may first be *constructed*, not how fast it may then climb.
 
+**[DEFAULT — balance rework pass 4]** Watchtower and Barracks gained their own tracks in this pass —
+unlike the three above, what scales per tier isn't a `producesResource` rate but a defensive die
+bonus and a recruitment reserve cap/rate respectively.
+
+**Watchtower — 2 upgrades, maxes at tier 3**
+
+| Step | Cost | Resulting effect |
+|---|---|---|
+| tier 1 (built) | — (2 Stone + 2 Ore to construct) | +1 to each defending die, capped at 6 |
+| tier 1 → 2 | 3 Wood + 5 Stone + 3 Ore | +2 to each defending die, capped at 6 |
+| tier 2 → 3 | 6 Wood + 9 Stone + 6 Ore | +3 to each defending die, capped at 8 |
+
+**Barracks — 2 upgrades, maxes at tier 3**
+
+| Step | Cost | Reserve cap | Recruitment rate |
+|---|---|---|---|
+| tier 1 (built) | — (3 Wood + 2 Ore + 5 Food to construct) | 9 | `max(1, floor(ownedTiles / 3))`/round |
+| tier 1 → 2 | 6 Wood + 4 Ore + 4 Food | 15 | `max(1, floor(ownedTiles / 2))`/round |
+| tier 2 → 3 | 10 Wood + 8 Ore + 8 Food | 21 | `max(1, floor(ownedTiles / 1))`/round |
+
+A player may own more than one Barracks (one per owned Plains tile) and upgrade each independently —
+the total Wood/Ore/Food sink, and the total army a player can field and feed, both scale with how
+large the empire already is.
+
 ### 7.1b Build Unlock Schedule
 
 **[DEFAULT — balance rework pass 2, new mechanic]** Every production building now carries a
@@ -1377,6 +1438,45 @@ The four ungated entries are deliberate, not oversights:
 - **Capital upgrade** — not a normal Build action at all; it runs on §7.3's tier table and its own
   VP prerequisite.
 
+### 7.1c The gear economy: CraftGear and SellLoot — **[DEFAULT — balance rework pass 4, new mechanics]**
+
+Two free actions (neither consumes the turn's one Phase 5 Build slot, §7 — same footing as Deploy
+Soldiers/Move Soldiers/Build Road) turn Loot into the game's other new resource sink and its newest
+source of Soldiers.
+
+**Craft Gear** — at an owned Smithy, with the hero standing on it: pay an Ore+Gold cost scaled to a
+chosen rarity, and draw ONE card of exactly that rarity from the same shared Loot pool every other
+draw site uses (§9), subject to the same exhaustion rule (§5.3) — a genuinely exhausted rarity still
+spends the resources but resolves empty-handed, never throws.
+
+| Rarity | Cost |
+|---|---|
+| Common | 3 Ore + 2 Gold |
+| Uncommon | 6 Ore + 4 Gold |
+| Rare | 10 Ore + 8 Gold |
+| Legendary | 16 Ore + 14 Gold |
+
+Unlike a monster kill's level-scaled odds, this is guaranteed — the trade-off is cost, and it can be
+repeated every turn the wallet allows, which is what makes it a genuine late-game Ore/Gold sink
+rather than a one-off purchase.
+
+**Sell Loot** — Craft Gear's inverse, and the direct answer to *"treasure/equipment has a gold value
+like in Munchkin which can be sold for additional troops."* At an owned Barracks, with the hero
+standing on it: sell one owned Loot card (equipped or not — an equipped card is unequipped as part of
+the sale) for Soldiers straight into that Barracks's reserve, scaled by rarity — **higher rarity =
+more troops** — and clamped by the Barracks's own tier reserve cap and the player's overall troop cap
+(§6.3b) the same way ordinary recruitment is.
+
+| Rarity sold | Soldiers granted |
+|---|---|
+| Common | 1 |
+| Uncommon | 2 |
+| Rare | 4 |
+| Legendary | 7 |
+
+Selling into a Barracks currently occupied by a rival garrison is rejected — retake it with Move
+Soldiers first, same rule Deploy Soldiers already follows (§6.3).
+
 ### 7.2 Prerequisites & Restrictions
 - Windmill requires an owned Farm on the same or another owned Plains tile before it may be built. **[CANON]**
 - Ruins/Dungeon tiles cannot host any economic building — the only building legal there is Watchtower. **[CANON]**
@@ -1395,7 +1495,7 @@ Build action, it is a real `Building` of type `'Capital'` present in `GameState.
 climbs to a maximum of `5`, one tier at a time, each reached by a `'Build'` action with
 `buildingType: 'Capital'` targeting the player's own Capital tile (§7.6's normal cost rules apply,
 Mage discount included) — `applyBuild` indexes `CAPITAL_TIERS[capitalTier]` to find the next tier, so
-attempting a sixth tier is rejected with "Town is already at max tier (5)".
+attempting a seventh tier is rejected with "Town is already at max tier (6)".
 
 | Tier | Cost | Effect |
 |---|---|---|
@@ -1404,12 +1504,22 @@ attempting a sixth tier is rejected with "Town is already at max tier (5)".
 | 3 | 4 Stone + 3 Ore + 4 Food | +3 hero Max HP |
 | 4 | 5 Ore + 5 Gold | +3 hero Max HP |
 | 5 | 8 Gold + 6 Ore + 6 Stone | +5 hero Max HP |
+| 6 — "the Grand Bazaar" | 15 Wood + 12 Stone + 10 Ore + 15 Gold + 8 Food | +4 hero Max HP |
 
 **[DEFAULT — territory rework]** The table was a 2-tier ladder, both tiers purchased. It's now
-**5 tiers**, with **tier 1 granted free at spawn** rather than bought. Stretching it to 5 tiers keeps
+5 tiers, with **tier 1 granted free at spawn** rather than bought. Stretching it to 5 tiers keeps
 the Town a real, ongoing investment choice deep into a game that, at the current VP win threshold
 (§11: 120), routinely runs well past 20 rounds — a 2-tier ladder would have been fully spent long
 before the game itself was.
+
+**[DEFAULT — balance rework pass 4]** A 6th tier, "the Grand Bazaar," was added on top — a genuine
+late-game wonder rather than a new building type (a separate BuildingType restricted to the Capital
+tile would collide with the Town/Capital `Building` already occupying that tile's one building slot).
+Its cost deliberately spans five of the six resources at once (only Meat excluded, since Meat's whole
+purpose is Soldier upkeep, §6.3a) specifically to give Wood, Stone, Ore, and Gold — the four resources
+with no other reliable late-game sink — one big, satisfying, one-time drain each, alongside the
+recurring sinks Watchtower/Barracks upgrades and Craft Gear provide (§7.1a/§7.1c). It also pays a
+larger VP row than a flat continuation of the tier 1–5 pattern would (§10).
 
 Every tier's `heroMaxHpBonus` applies **the moment it's bought**, immediately raising both the hero's
 `maxHp` and current `hp` by that amount (§8.2's "level up heals to new max" rule does NOT apply here —
@@ -1597,6 +1707,7 @@ See §6.1 bracket table (Monster Level 1–2 → Common, 3–4 → Uncommon, 5�
 | Town (Capital upgrade) Tier 3 | +3 | On construction |
 | Town (Capital upgrade) Tier 4 | +4 | On construction |
 | Town (Capital upgrade) Tier 5 | +6 | On construction |
+| Town (Capital upgrade) Tier 6 — "the Grand Bazaar" | +8 | On construction. **[DEFAULT — balance rework pass 4]** |
 | Hero reaches Level 3 | +1 | Once, on first reaching |
 | Hero reaches Level 5 | +2 | Once, on first reaching |
 | Hero reaches Level 7 | +3 | Once, on first reaching |
@@ -1615,17 +1726,29 @@ Common/Uncommon/Rare Loot grant no direct VP (combat power only). A player's tot
 
 ## 11. Win Conditions
 
-Checked at the end of every round, after all seated players have completed their turn for that round. **[CANON: "at the end of a round"]**
+Checked at the end of every round, after all seated players have completed their turn for that round —
+**except Capital Conquest, condition 4 below, which is checked and can trigger the instant its own
+event happens, mid-round.** **[CANON: "at the end of a round", for conditions 1–3]**
 
 | # | Condition | Exact Threshold |
 |---|---|---|
 | 1 | Victory Points | Player's total VP >= **120** **[DEFAULT — doubled twice per direct feedback: 30 → 60 → 120; `WIN_VP_THRESHOLD` in `engine/constants.ts`]** |
-| 2 | Domination | Player controls >= 60% of all tiles currently placed on the shared map, OR all rival heroes/capitals have been eliminated. **[DEFAULT — territory rework]** A rival is eliminated when their **Capital tile changes hands**, which — like any other conquest — happens when an occupation of it settles at the start of a later turn (§6.3, held for `TERRITORY_CLAIM_ROUNDS` = 3 full rounds), not at the moment the battle over it is won |
+| 2 | Domination | Player controls >= 60% of all tiles currently placed on the shared map. **[DEFAULT — balance rework pass 4]** The old alternate trigger here — "OR all rival heroes/capitals have been eliminated" — is gone; see condition 4, which supersedes it outright |
 | 3 | Hero Level Race | Any of the player's heroes reaches Level 10 |
+| 4 | **Capital Conquest** | The instant ANY rival's Capital tile's occupation claim settles (§6.3, held uncontested for `TERRITORY_CLAIM_ROUNDS` = 3 full rounds) in a player's favor, that player **wins the entire game immediately** — regardless of how many other players remain seated. **[DEFAULT — balance rework pass 4, direct request: "make it so that conquering the capital of another player is a win condition," confirmed as an instant win for the conqueror]** |
 
-Condition *shapes* **[CANON]**; the VP number itself is now **[DEFAULT — doubled twice, see below]**.
+Condition *shapes* **[CANON]**; the VP number itself, and condition 4 in full, are **[DEFAULT]**.
 Always read `WIN_VP_THRESHOLD` straight from `engine/constants.ts` before quoting it elsewhere in the
 codebase or docs — it has moved more than once in quick succession and a stale copy is an easy trap.
+
+**[DEFAULT — balance rework pass 4]** Capital Conquest replaces what used to be Domination's
+alternate "eliminate every rival" trigger. That old path was already effectively an elimination race;
+this pass made it explicit, instant, and no longer contingent on being the LAST player standing — a
+single captured Capital is enough, at any point in the game, regardless of how many other players are
+still seated. Capturing a Capital still flags its former owner `isEliminated` exactly as before
+(`engine/reducers.ts`'s `claimHeldTerritory`), but now ALSO ends the whole match right there in the
+same breath — the two used to be the same fact viewed from two different angles ("this player is out"
+vs. "if everyone is out but one, that one wins"); now the capture event itself is the win, full stop.
 
 **[DEFAULT — balance rework pass 2, then doubled twice more]** Why 30 in the first place: owned tiles
 alone pay 1 VP each (§10) and every player places one tile per round essentially unopposed, so VP
@@ -1645,34 +1768,35 @@ instead of the headline.
 ### 11.1 Minimum Round — **[DEFAULT — balance rework pass 2, new mechanic]**
 
 No threshold-based win may trigger before **Round 12** (`WIN_MIN_ROUND` in `engine/constants.ts`).
-Below that round, conditions 1 (Victory Points), 3 (Hero Level Race), and the **60%-tile-share half
-of condition 2** are simply not evaluated — no combination of lucky tile draws, a rushed hero, or
-an early snowball can end the game before the mid-game systems exist at all. Raising the VP
-threshold alone wouldn't have covered this: the Hero Level Race and the tile-share path have their
-own fast, luck-sensitive routes to a very early finish.
+Below that round, conditions 1 (Victory Points), 2 (Domination's 60% tile share), and 3 (Hero Level
+Race) are simply not evaluated — no combination of lucky tile draws, a rushed hero, or an early
+snowball can end the game before the mid-game systems exist at all. Raising the VP threshold alone
+wouldn't have covered this: the Hero Level Race and the tile-share path have their own fast,
+luck-sensitive routes to a very early finish.
 
-**The eliminate-all-rivals half of condition 2 is deliberately EXEMPT from this floor.** Wiping out
-every other seated player is a decisive military result that has earned its ending whenever it
-lands, and — more practically — gating it would mean the game continuing with nobody left to play
-against: rounds would keep ticking past a board with exactly one surviving player until Round 12
-arrived and finally announced what everyone already knew. A minimum-round floor exists to keep the
-game's systems in play, and there are no systems left in play once there is one player. This is the
-only win path that can resolve before Round 12; see `checkWinConditions` in `engine/selectors.ts`,
-where the `pastMinRound` guard is applied to the VP, Hero Level Race, and tile-share branches but
-pointedly not to the elimination branch.
+**Condition 4, Capital Conquest, is deliberately EXEMPT from this floor** — the same reasoning that
+used to justify exempting Domination's old eliminate-all-rivals trigger, now sharpened: capturing a
+Capital is a decisive military result that has earned its ending whenever it lands, at any round.
+It is also checked in a completely different place from the other three — see the procedure below.
 
 **[DEFAULT — post-launch fix]** The 60% share only evaluates once the shared map has at least
 `8 × seatedPlayers` tiles placed in total (`WIN_DOMINATION_MIN_TILES_PER_PLAYER` in
 `engine/constants.ts`). Without this gate, a fresh 2-player game where one side has simply
 placed one more tile than the other already clears 60% of a 2-3-tile board — a real bug an
 AI-vs-AI integration test caught within the first turn of play, not a hypothetical edge case.
-The eliminate-all-rivals path is exempt from this gate — wiping out every other seated player
-is a real win at any board size.
 
 **Trigger check procedure:**
-1. At round end, evaluate all three conditions for every player simultaneously, subject to §11.1's
-   Round-12 floor (which suppresses everything except the eliminate-all-rivals path) and the
-   board-size gate above (which suppresses the 60%-share path specifically).
+
+Capital Conquest (condition 4) is checked separately from the other three, and first in sequence —
+the instant a Capital's occupation claim settles (`engine/reducers.ts`'s `claimHeldTerritory`, which
+runs at the start of the claimant's own Phase 0, not necessarily at a round boundary), the game ends
+immediately in that player's favor and no further action by anyone is legal. Conditions 1–3 never get
+the chance to fire afterward for that match, and their own round-end check (below) simply never runs
+again once `winnerId` is set.
+
+Conditions 1–3, unchanged in shape from before this pass:
+1. At round end, evaluate Victory Points, Domination's 60% share, and Hero Level Race for every
+   player simultaneously, subject to §11.1's Round-12 floor and the board-size gate above.
 2. If exactly one player triggers any condition, that player wins immediately. **[CANON: "first to trigger ... wins"]**
 3. If multiple players trigger a condition in the same round-end check, the player with the highest total VP (§10) among them wins. **[CANON: "ties broken by highest total Victory Points"]**
 4. If VP is also tied, the winner is whichever tied player is earlier in the current round's turn order. **[DEFAULT: secondary tie-break, not specified in canon]**

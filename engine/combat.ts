@@ -5,7 +5,7 @@
  * XP gain, deck draws, tile ownership flips) to state.
  */
 
-import { HERO_BATTLE_DAMAGE_FLOOR, MONSTER_THRESHOLD_OFFSET, VOLCANO_MONSTER_LEVEL, WATCHTOWER_DIE_BONUS, WATCHTOWER_DIE_CAP } from './constants';
+import { HERO_BATTLE_DAMAGE_FLOOR, MONSTER_THRESHOLD_OFFSET, VOLCANO_MONSTER_LEVEL, WATCHTOWER_TIERS } from './constants';
 import { gearBonus, hasExtraCombatDie } from './selectors';
 import type { RngStream } from './rng';
 import type { HeroState, MonsterCard, Player } from './types';
@@ -139,19 +139,26 @@ function buildDieEntries(unitCount: number, hero: HeroBattleDie | null, rollUnit
  *  optional (default null) so every pre-existing call site — AI prediction, other tests — is
  *  unaffected; a joining hero's die is merged into their side's sorted array as one extra entry
  *  rather than replacing a troop's, so it can only ever ADD a pairing (when the other side still
- *  has spare, otherwise-unpaired dice) or contest a slot on genuinely comparable terms. */
+ *  has spare, otherwise-unpaired dice) or contest a slot on genuinely comparable terms.
+ *
+ *  [DEFAULT — balance rework pass 4] `defenderWatchtowerTier` replaces the old plain boolean —
+ *  0 means no Watchtower on the defending tile, 1-3 is the built tier (WATCHTOWER_TIERS,
+ *  constants.ts), each tier a bigger die bonus/cap. Callers pass `0` for "no Watchtower" where
+ *  the old code passed `false`. */
 export function resolveArmyVsTerritory(
   attackingUnits: number,
   defendingUnits: number,
-  defenderHasWatchtower: boolean,
+  defenderWatchtowerTier: number,
   rng: RngStream,
   attackerHero: HeroBattleDie | null = null,
   defenderHero: HeroBattleDie | null = null
 ): ArmyVsTerritoryOutcome {
+  const watchtower =
+    defenderWatchtowerTier > 0 ? WATCHTOWER_TIERS[Math.min(defenderWatchtowerTier, WATCHTOWER_TIERS.length) - 1] : null;
   const attackerEntries = buildDieEntries(attackingUnits, attackerHero, () => rng.rollDie());
   const defenderEntries = buildDieEntries(defendingUnits, defenderHero, () => {
     const base = rng.rollDie();
-    return defenderHasWatchtower ? Math.min(base + WATCHTOWER_DIE_BONUS, WATCHTOWER_DIE_CAP) : base;
+    return watchtower ? Math.min(base + watchtower.dieBonus, watchtower.dieCap) : base;
   });
 
   const pairs = Math.min(attackerEntries.length, defenderEntries.length);

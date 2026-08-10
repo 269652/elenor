@@ -30,7 +30,7 @@
  * out of sync with it.
  */
 
-import { hexKey, hexNeighbors, MIN_SOLDIERS_LEFT_BEHIND, type GameState, type HexCoord, type PlayerId, type Tile } from '@/engine';
+import { hexKey, hexNeighbors, MIN_SOLDIERS_LEFT_BEHIND, tierOf, type GameState, type HexCoord, type PlayerId, type Tile } from '@/engine';
 import { garrisonOwnerOf } from '@/engine/reducers';
 import { predictArmyVsTerritory } from './combatPrediction';
 import { evaluatePosition } from './evaluate';
@@ -166,8 +166,8 @@ function marchValue(
 
   const targetTile = state.map[hexKey(targetCoord)];
   const defendingUnits = targetTile?.militiaCount ?? 0;
-  const hasWatchtower = targetTile?.building?.type === 'Watchtower';
-  const prediction = predictArmyVsTerritory(units, defendingUnits, hasWatchtower);
+  const watchtowerTier = targetTile?.building?.type === 'Watchtower' ? tierOf(targetTile.building) : 0;
+  const prediction = predictArmyVsTerritory(units, defendingUnits, watchtowerTier);
 
   // CHANCE node: tile taken vs repulsed. The taken branch's attacker survivor count is EXACT, not
   // an approximation — §6.3 pairs each attacker against one defender, so wiping the garrison out
@@ -215,14 +215,14 @@ function bestOpponentResponseValue(state: GameState, attackerId: PlayerId, defen
   const contestedTile = state.map[hexKey(contestedCoord)];
   if (contestedTile && garrisonOwnerOf(contestedTile) === attackerId) {
     const defendingUnits = contestedTile.militiaCount ?? 0;
-    const hasWatchtower = contestedTile.building?.type === 'Watchtower';
+    const watchtowerTier = contestedTile.building?.type === 'Watchtower' ? tierOf(contestedTile.building) : 0;
     for (const neighbor of hexNeighbors(contestedCoord)) {
       const tile = state.map[hexKey(neighbor)];
       if (!tile || garrisonOwnerOf(tile) !== defenderId) continue;
       const units = tile.militiaCount ?? 0;
       if (units <= 0) continue;
 
-      const prediction = predictArmyVsTerritory(units, defendingUnits, hasWatchtower);
+      const prediction = predictArmyVsTerritory(units, defendingUnits, watchtowerTier);
       const retaken = applyHypotheticalOutcome(state, defenderId, neighbor, contestedCoord, units, units, 0, true);
       const held = applyHypotheticalOutcome(
         state,

@@ -6,6 +6,8 @@ import {
   applyAdvancePhase,
   applyBuild,
   applyBuildRoad,
+  applyCraftGear,
+  applySellLoot,
   applyDeploySoldiers,
   applyMoveSoldiers,
   applyDepositResources,
@@ -45,6 +47,10 @@ export function applyAction(state: GameState, action: Action): GameState {
       return applyUpgradeBuilding(state, action);
     case 'BuildRoad':
       return applyBuildRoad(state, action);
+    case 'CraftGear':
+      return applyCraftGear(state, action);
+    case 'SellLoot':
+      return applySellLoot(state, action);
     case 'LevelUpHero':
       return applyLevelUpHero(state, action);
     case 'EquipLoot':

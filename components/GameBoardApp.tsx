@@ -25,6 +25,7 @@ import {
   type PlayerId,
   type ResourceCost,
   type Tile,
+  type WinCondition,
 } from '@/engine';
 import { HexBoard } from '@/components/board/HexBoard';
 import { HeroPanel } from '@/components/hero/HeroPanel';
@@ -38,6 +39,15 @@ import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from 
 import { useAiTurn } from '@/hooks/use-ai-turn';
 
 const NO_AI_PLAYERS: ReadonlySet<PlayerId> = new Set();
+
+/** Friendly victory-screen labels — WinCondition's own values are code identifiers (camelCase-
+ *  ish, no spaces), fine for logs/events but not for the win banner a player actually reads. */
+const WIN_CONDITION_LABEL: Record<WinCondition, string> = {
+  VictoryPoints: 'Victory Points',
+  Domination: 'Domination',
+  HeroLevelRace: 'Hero Level Race',
+  CapitalConquest: 'Capital Conquest',
+};
 
 /** The wooden-table backdrop behind the whole game screen — fixed to the viewport (not the
  *  scrolling sidebar) so it reads as the surface everything is sitting on, not a page
@@ -259,7 +269,7 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
             {winner?.name} wins!
           </h2>
           <p className="font-mono text-xs uppercase tracking-wide text-hx-ink-dim motion-safe:animate-fade-up motion-safe:[animation-delay:280ms]">
-            Win condition: {state.winCondition}
+            Win condition: {state.winCondition ? WIN_CONDITION_LABEL[state.winCondition] : ''}
           </p>
         </div>
       </>
