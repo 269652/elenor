@@ -287,8 +287,11 @@ MoveSoldiers(fromCoord, toCoord, count)
 **Occupation, not conquest.** Winning a fight (or walking onto empty ground) only plants your troops.
 The tile only actually changes hands once your Soldiers have held it **uncontested for 3 full
 rounds** — giving the original owner real time to march back and fight for it. Until the claim
-lands, the tile still produces and still scores VP for its old owner. **Taking a rival's Capital
-this way wins the entire game, instantly** — see [Victory Points & winning](#victory-points--winning).
+lands, the tile still produces and still scores VP for its old owner.
+
+**A rival's Capital holds out longer — 5 rounds, not 3.** Taking a rival's Capital this way **wins
+the entire game, instantly**, so its defender earns a wider window than an ordinary tile's to notice
+the invasion and march back before it's over — see [Victory Points & winning](#victory-points--winning).
 
 **Recruiting an army.** A Barracks passively recruits `max(1, floor(ownedTiles / 3))` Soldiers per
 round into its own tile (capped at 9 in reserve at tier 1 — both numbers improve with the Barracks's

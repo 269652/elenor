@@ -183,8 +183,10 @@ Untagged prose is structural/procedural (how systems connect), derived directly 
 > moment ANY rival's Capital claim settles, the whole game ends right there, regardless of remaining
 > player count — plus *"AI should also be adapted so that protecting capital and borders with troops
 > is properly scored,"* and, mid-pass, *"treasure/equipment has a gold value like in Munchkin which
-> can be sold for additional troops — higher level equip = more troops."* Five changes, each tagged
-> **[DEFAULT — balance rework pass 4]** at the point it applies below:
+> can be sold for additional troops — higher level equip = more troops,"* and, once Capital Conquest
+> made a single lost Capital fatal, *"conquering capital requires 5 rounds of staying on it; not only
+> [3] like for normal tiles."* Six changes, each tagged **[DEFAULT — balance rework pass 4]** at the
+> point it applies below:
 >
 > 1. **Watchtower and Barracks each gained a 3-tier upgrade track** (§7.1a), a real Stone+Ore(+Wood)
 >    and Wood+Ore+Food sink respectively that also raises a Watchtower's defending-die bonus (+1/+2/+3,
@@ -205,6 +207,11 @@ Untagged prose is structural/procedural (how systems connect), derived directly 
 >    player count, and exempt from `WIN_MIN_ROUND` the same way the old "eliminate every rival"
 >    Domination clause was — which it replaces outright: a single captured Capital is enough now, so
 >    Domination's elimination sub-path is gone (the 60%-tile-share path is untouched).
+> 6. **A Capital's own occupation claim takes `CAPITAL_CLAIM_ROUNDS` = 5 full rounds to settle** (§6.3,
+>    "Occupation, not conquest"), not the ordinary tile's `TERRITORY_CLAIM_ROUNDS` = 3 — a direct
+>    follow-up once Capital Conquest made settling this one claim an instant, whole-game win: its
+>    defender earns a genuinely wider window to notice the invasion and march back, not the same
+>    three-round grace period as losing a single Farm.
 
 ---
 
@@ -755,20 +762,28 @@ at the start of your Phase 0 (§2), for every tile T:
     if T.ownerId != you
        and the Soldiers on T are yours
        and T.occupationSinceRound is set
-       and currentRound >= T.occupationSinceRound + TERRITORY_CLAIM_ROUNDS:   # TERRITORY_CLAIM_ROUNDS = 3
+       and currentRound >= T.occupationSinceRound + requiredRounds:   # see below for requiredRounds
            T.ownerId = you        # the flag finally changes
 ```
 
+**[DEFAULT — balance rework pass 4, direct request]** `requiredRounds` is **`CAPITAL_CLAIM_ROUNDS` = 5**
+when `T` carries a `Building` of type `'Capital'` (i.e. it's someone's Capital tile, occupied or not —
+the check is on the building, not on who currently holds it), and the ordinary **`TERRITORY_CLAIM_ROUNDS`
+= 3** for every other tile. A Capital genuinely holds out longer than a Farm: since Capital Conquest
+(§11) makes settling THIS one claim an instant win for the whole game, its defender earns a wider
+window to notice the invasion and march back before it's over — not the same three-round grace period
+as losing a single tile of income.
+
 **[DEFAULT — territory rework, tuned per designer feedback: was effectively 1 round]** At 1 round, a
 raid could plant a flag and walk away with the deed almost immediately — a defender had exactly one
-turn to notice and react before it was permanent. 3 gives the defender real time to notice an
-incursion and march back before it's permanent, which is the whole point of occupation being a
-process rather than an instant capture. Because every seated player takes exactly one turn per round,
-a tile you take on your turn in round *N* is not claimed until the start of your turn in round
-`N + 3` — and **every rival gets a full two rounds of their own turns in between** (not just one) to
-march Soldiers back onto the hex and fight you for it before the deed ever transfers. Nothing about
-the game is decided by a single dice roll on a single turn any more; taking ground means taking it
-*and holding it in front of everyone, for a while*.
+turn to notice and react before it was permanent. 3 (5 for a Capital) gives the defender real time to
+notice an incursion and march back before it's permanent, which is the whole point of occupation being
+a process rather than an instant capture. Because every seated player takes exactly one turn per round,
+an ordinary tile taken on your turn in round *N* is not claimed until the start of your turn in round
+`N + 3` (a Capital: `N + 5`) — and **every rival gets that many turns of their own in between**
+(2 for an ordinary tile, 4 for a Capital — not just one) to march Soldiers back onto the hex and fight
+you for it before the deed ever transfers. Nothing about the game is decided by a single dice roll on a
+single turn any more; taking ground means taking it *and holding it in front of everyone, for a while*.
 
 Consequences worth stating plainly:
 - Until the claim lands, the tile still counts as its old owner's for **Victory Points** (§10),
@@ -776,15 +791,16 @@ Consequences worth stating plainly:
   their feet.
 - If the occupier is driven off before their next turn, the occupation simply never happened —
   there is nothing to undo.
-- **Capturing a Capital still eliminates its owner** (§11's Domination path), exactly as under the
-  old rule. That elimination fires at the moment the claim settles, not at the moment the battle is
-  won — so a player whose Capital is standing under enemy troops has multiple full rounds (§'s
-  `TERRITORY_CLAIM_ROUNDS` = 3) of everyone else's turns to take it back before the elimination is real.
+- **Capturing a Capital still eliminates its owner**, exactly as before — but as of balance rework
+  pass 4 it now ALSO ends the whole game immediately in the invader's favor (§11's Capital Conquest).
+  Both fire at the moment the claim settles, not at the moment the battle is won — so a player whose
+  Capital is standing under enemy troops has `CAPITAL_CLAIM_ROUNDS` (5) full rounds of everyone else's
+  turns to take it back before it's over, not the ordinary tile's 3.
 - **Reinforcing a tile you're occupying but don't yet own resets its clock.** Any successful march
   onto a non-owned destination — including piling more of your own Soldiers onto ground you're already
   standing on — sets `occupationSinceRound` to the *current* round, not just the first one. Feeding
   troops into a contested hex every turn to keep it safe therefore keeps postponing your own claim to
-  it; the 3-round wait only counts down from whichever march was most recent.
+  it; the wait (3 rounds, or 5 for a Capital) only counts down from whichever march was most recent.
 
 **Worked Example (the timeline, `TERRITORY_CLAIM_ROUNDS` = 3):** Round 6, Blue's turn, Phase 5. Blue
 marches 4 Soldiers onto Red's undefended Farm tile — `occupationSinceRound = 6`. The Farm is occupied
@@ -1735,7 +1751,7 @@ event happens, mid-round.** **[CANON: "at the end of a round", for conditions 1�
 | 1 | Victory Points | Player's total VP >= **120** **[DEFAULT — doubled twice per direct feedback: 30 → 60 → 120; `WIN_VP_THRESHOLD` in `engine/constants.ts`]** |
 | 2 | Domination | Player controls >= 60% of all tiles currently placed on the shared map. **[DEFAULT — balance rework pass 4]** The old alternate trigger here — "OR all rival heroes/capitals have been eliminated" — is gone; see condition 4, which supersedes it outright |
 | 3 | Hero Level Race | Any of the player's heroes reaches Level 10 |
-| 4 | **Capital Conquest** | The instant ANY rival's Capital tile's occupation claim settles (§6.3, held uncontested for `TERRITORY_CLAIM_ROUNDS` = 3 full rounds) in a player's favor, that player **wins the entire game immediately** — regardless of how many other players remain seated. **[DEFAULT — balance rework pass 4, direct request: "make it so that conquering the capital of another player is a win condition," confirmed as an instant win for the conqueror]** |
+| 4 | **Capital Conquest** | The instant ANY rival's Capital tile's occupation claim settles (§6.3, held uncontested for `CAPITAL_CLAIM_ROUNDS` = 5 full rounds — longer than an ordinary tile's `TERRITORY_CLAIM_ROUNDS` = 3, direct request) in a player's favor, that player **wins the entire game immediately** — regardless of how many other players remain seated. **[DEFAULT — balance rework pass 4, direct request: "make it so that conquering the capital of another player is a win condition," confirmed as an instant win for the conqueror]** |
 
 Condition *shapes* **[CANON]**; the VP number itself, and condition 4 in full, are **[DEFAULT]**.
 Always read `WIN_VP_THRESHOLD` straight from `engine/constants.ts` before quoting it elsewhere in the

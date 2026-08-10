@@ -4,7 +4,7 @@ import { garrisonOwnerOf } from '../reducers';
 import { resolveArmyVsTerritory } from '../combat';
 import { RngStream } from '../rng';
 import { tileAt } from '../selectors';
-import { SOLDIER_UPKEEP_FOOD_PER_GROUP, SOLDIER_UPKEEP_GROUP_SIZE, TERRITORY_CLAIM_ROUNDS } from '../constants';
+import { CAPITAL_CLAIM_ROUNDS, SOLDIER_UPKEEP_FOOD_PER_GROUP, SOLDIER_UPKEEP_GROUP_SIZE, TERRITORY_CLAIM_ROUNDS } from '../constants';
 import { hexKey, IllegalActionError, Phase } from '../types';
 import type { GameState, HexCoord, Player, PlayerId, Tile } from '../types';
 import { makePlayer, makeTile } from './testUtils';
@@ -102,7 +102,18 @@ function borderFixture(opts: BorderOptions = {}): GameState {
     resources: { Food: 200, Meat: 0 },
   });
   const tiles: Tile[] = [
-    makeTile({ coord: P1_CAPITAL, type: 'Plains', ownerId: 'p1', militiaCount: opts.p1CapitalMilitia ?? 0 }),
+    makeTile({
+      coord: P1_CAPITAL,
+      type: 'Plains',
+      ownerId: 'p1',
+      militiaCount: opts.p1CapitalMilitia ?? 0,
+      // Real Capital tiles always carry a Building of type 'Capital' from spawn (setup.ts) —
+      // attaching it here so any test exercising CAPITAL_CLAIM_ROUNDS (reducers.ts's
+      // claimHeldTerritory keys off tile.building?.type, not the coordinate alone) sees the
+      // same shape a real game would, not a plain Plains tile that merely happens to share the
+      // coordinate a Player.capitalTile field points at.
+      building: { id: 'cap-p1', type: 'Capital', coord: P1_CAPITAL, ownerId: 'p1', tier: 1 },
+    }),
     makeTile({ coord: P1_BORDER, type: 'Plains', ownerId: 'p1', militiaCount: opts.p1BorderMilitia ?? 0 }),
     makeTile({
       coord: P2_BORDER,
@@ -113,7 +124,13 @@ function borderFixture(opts: BorderOptions = {}): GameState {
         ? { building: { id: 'wt', type: 'Watchtower' as const, coord: P2_BORDER, ownerId: 'p2' } }
         : {}),
     }),
-    makeTile({ coord: P2_CAPITAL, type: 'Plains', ownerId: 'p2', militiaCount: opts.p2CapitalMilitia ?? 0 }),
+    makeTile({
+      coord: P2_CAPITAL,
+      type: 'Plains',
+      ownerId: 'p2',
+      militiaCount: opts.p2CapitalMilitia ?? 0,
+      building: { id: 'cap-p2', type: 'Capital', coord: P2_CAPITAL, ownerId: 'p2', tier: 1 },
+    }),
     makeTile({ coord: NEUTRAL, type: 'Forest', ownerId: null }),
     makeTile({ coord: FAR, type: 'Plains', ownerId: 'p2' }),
   ];
@@ -143,14 +160,16 @@ function advanceToNextTurnOf(state: GameState, playerId: PlayerId): GameState {
   return s;
 }
 
-/** Advances to `playerId`'s next turn exactly TERRITORY_CLAIM_ROUNDS times in a row — i.e. far
- *  enough that any occupation they're holding is guaranteed to have survived long enough to
- *  settle (claimHeldTerritory requires roundNumber >= occupationSinceRound + TERRITORY_CLAIM_ROUNDS,
- *  and each call to advanceToNextTurnOf that starts from this player's own turn advances the
- *  round counter by exactly 1). */
-function advanceClaimWindow(state: GameState, playerId: PlayerId): GameState {
+/** Advances to `playerId`'s next turn exactly `rounds` times in a row — i.e. far enough that any
+ *  occupation they're holding is guaranteed to have survived long enough to settle
+ *  (claimHeldTerritory requires roundNumber >= occupationSinceRound + requiredRounds, and each
+ *  call to advanceToNextTurnOf that starts from this player's own turn advances the round
+ *  counter by exactly 1). Defaults to TERRITORY_CLAIM_ROUNDS for an ordinary tile — pass
+ *  CAPITAL_CLAIM_ROUNDS explicitly for a Capital target (balance rework pass 4: a Capital's own,
+ *  longer hold time — see reducers.ts's claimHeldTerritory). */
+function advanceClaimWindow(state: GameState, playerId: PlayerId, rounds: number = TERRITORY_CLAIM_ROUNDS): GameState {
   let s = state;
-  for (let i = 0; i < TERRITORY_CLAIM_ROUNDS; i++) s = advanceToNextTurnOf(s, playerId);
+  for (let i = 0; i < rounds; i++) s = advanceToNextTurnOf(s, playerId);
   return s;
 }
 
@@ -555,7 +574,8 @@ describe('Claiming a Capital eliminates its owner', () => {
     s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
     expect(playerIn(s, 'p2').isEliminated).toBe(false); // not yet — the claim hasn't landed
 
-    const next = advanceClaimWindow(s, 'p1');
+    // A Capital's own, longer hold time (balance rework pass 4) — see CAPITAL_CLAIM_ROUNDS.
+    const next = advanceClaimWindow(s, 'p1', CAPITAL_CLAIM_ROUNDS);
     expect(tileAt(next, P2_CAPITAL)!.ownerId).toBe('p1');
     expect(playerIn(next, 'p2').isEliminated).toBe(true);
     const eliminated = eventsOfType(next, 'PlayerEliminated');
@@ -577,13 +597,32 @@ describe('Claiming a Capital eliminates its owner', () => {
 
   // ── Capital Conquest — instant win [DEFAULT — balance rework pass 4, new] ─────────────────
   describe('Capital Conquest — claiming a rival Capital wins the whole game immediately', () => {
+    it('needs CAPITAL_CLAIM_ROUNDS (5), not the ordinary TERRITORY_CLAIM_ROUNDS (3) — a Capital holds out longer, direct request', () => {
+      const state = borderFixture({ p1BorderMilitia: 7 });
+      let s = applyAction(state, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P1_BORDER, toCoord: P2_BORDER, count: 6 });
+      s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
+
+      // Only the ordinary tile's window (3 rounds) has passed — the Capital's own, longer
+      // window (5) has not, so the claim must NOT have settled yet.
+      const tooEarly = advanceClaimWindow(s, 'p1', TERRITORY_CLAIM_ROUNDS);
+      expect(tileAt(tooEarly, P2_CAPITAL)!.ownerId).toBe('p2');
+      expect(tooEarly.winnerId).toBeNull();
+      expect(playerIn(tooEarly, 'p2').isEliminated).toBe(false);
+
+      // The remaining rounds up to CAPITAL_CLAIM_ROUNDS — NOW it settles.
+      const settled = advanceClaimWindow(tooEarly, 'p1', CAPITAL_CLAIM_ROUNDS - TERRITORY_CLAIM_ROUNDS);
+      expect(tileAt(settled, P2_CAPITAL)!.ownerId).toBe('p1');
+      expect(settled.winnerId).toBe('p1');
+      expect(settled.winCondition).toBe('CapitalConquest');
+    });
+
     it('sets winnerId/winCondition/status the instant the claim settles, not merely eliminating', () => {
       const state = borderFixture({ p1BorderMilitia: 7 });
       let s = applyAction(state, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P1_BORDER, toCoord: P2_BORDER, count: 6 });
       s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
       expect(s.winnerId).toBeNull(); // not yet — the claim hasn't landed
 
-      const next = advanceClaimWindow(s, 'p1');
+      const next = advanceClaimWindow(s, 'p1', CAPITAL_CLAIM_ROUNDS);
       expect(next.winnerId).toBe('p1');
       expect(next.winCondition).toBe('CapitalConquest');
       expect(next.status).toBe('finished');
@@ -593,13 +632,13 @@ describe('Claiming a Capital eliminates its owner', () => {
     });
 
     it('is exempt from WIN_MIN_ROUND — fires however early the claim can genuinely settle', () => {
-      // TERRITORY_CLAIM_ROUNDS itself (3) already puts the settle round well under WIN_MIN_ROUND
-      // (12) starting from round 5 — no special-casing needed to prove the exemption; if this
+      // CAPITAL_CLAIM_ROUNDS (5) starting from round 2 already puts the settle round (7) well
+      // under WIN_MIN_ROUND (12) — no special-casing needed to prove the exemption; if this
       // were gated the same way VP/Domination/HeroLevelRace are, it would NOT have fired yet.
       const state = borderFixture({ p1BorderMilitia: 7, state: { roundNumber: 2 } });
       let s = applyAction(state, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P1_BORDER, toCoord: P2_BORDER, count: 6 });
       s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
-      const next = advanceClaimWindow(s, 'p1');
+      const next = advanceClaimWindow(s, 'p1', CAPITAL_CLAIM_ROUNDS);
       expect(next.roundNumber).toBeLessThan(12);
       expect(next.winnerId).toBe('p1');
       expect(next.winCondition).toBe('CapitalConquest');
@@ -609,7 +648,7 @@ describe('Claiming a Capital eliminates its owner', () => {
       const state = borderFixture({ p1BorderMilitia: 7 });
       let s = applyAction(state, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P1_BORDER, toCoord: P2_BORDER, count: 6 });
       s = applyAction(s, { type: 'MoveSoldiers', actorId: 'p1', fromCoord: P2_BORDER, toCoord: P2_CAPITAL, count: 4 });
-      const next = advanceClaimWindow(s, 'p1');
+      const next = advanceClaimWindow(s, 'p1', CAPITAL_CLAIM_ROUNDS);
       expect(() => applyAction(next, { type: 'AdvancePhase', actorId: next.currentPlayerId })).toThrow(IllegalActionError);
     });
   });

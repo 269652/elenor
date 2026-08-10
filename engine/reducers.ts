@@ -50,6 +50,7 @@ import {
   BARRACKS_RESERVE_CAP,
   BARRACKS_TIERS,
   BUILDING_DEFINITIONS,
+  CAPITAL_CLAIM_ROUNDS,
   CAPITAL_TIERS,
   CLASS_DEFINITIONS,
   GEAR_SLOT_COUNT,
@@ -1427,7 +1428,12 @@ function claimHeldTerritory(draft: GameState, playerId: PlayerId) {
   for (const tile of Object.values(draft.map)) {
     if (tile.ownerId === playerId) continue;
     if (garrisonOwnerOf(tile) !== playerId) continue;
-    if (tile.occupationSinceRound === undefined || draft.roundNumber < tile.occupationSinceRound + TERRITORY_CLAIM_ROUNDS) continue;
+    // [DEFAULT — balance rework pass 4, direct request] A Capital tile always carries a real
+    // Building of type 'Capital' from spawn onward (setup.ts), regardless of who currently
+    // occupies it — checking the building type, not cross-referencing capitalTile against every
+    // player, is what lets this stay correct even mid-occupation before ownership has settled.
+    const requiredRounds = tile.building?.type === 'Capital' ? CAPITAL_CLAIM_ROUNDS : TERRITORY_CLAIM_ROUNDS;
+    if (tile.occupationSinceRound === undefined || draft.roundNumber < tile.occupationSinceRound + requiredRounds) continue;
 
     const previousOwnerId = tile.ownerId;
     tile.ownerId = playerId;

@@ -141,6 +141,13 @@ export const WATCHTOWER_TIERS = [
  *  back before it's permanent, which is the whole point of occupation being a process rather
  *  than an instant capture. */
 export const TERRITORY_CLAIM_ROUNDS = 3;
+/** [DEFAULT — balance rework pass 4, direct request] The Capital tile's own hold time before its
+ *  claim settles — longer than an ordinary tile's TERRITORY_CLAIM_ROUNDS (3) above, since Capital
+ *  Conquest (§11) makes settling this ONE claim an instant, whole-game win: a defender should get
+ *  real, extended time to mount a counter-attack before the game can end under them, not the same
+ *  window as losing a Farm. Checked by claimHeldTerritory the same way — the only difference is
+ *  which constant it reads for a tile whose Building is type 'Capital'. */
+export const CAPITAL_CLAIM_ROUNDS = 5;
 // ── Troop cap [DEFAULT — direct request] ────────────────────────────────────────────────────
 /** A player's TOTAL Soldier count — every tile they garrison anywhere, the same basis
  *  resolveSoldierUpkeep bills against (see garrisonOwnerOf) — can never exceed this, and it
