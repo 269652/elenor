@@ -345,11 +345,18 @@ export interface JoinRoomHandlers {
 export async function probeLobby(roomCode: string): Promise<LobbyPlayerInfo[]> {
   const PeerCtor = await loadPeerJs();
   const candidates = signalingCandidates();
+  const fallbackCandidate: PeerCtorOptions = {
+    host: '0.peerjs.com',
+    port: 443,
+    path: '/peerjs',
+    secure: true,
+    config: defaultIceConfig(),
+  };
 
   const peer = await new Promise<Peer>((resolve, reject) => {
     const tryCandidate = (idx: number, transportRetriesLeft: number) => {
-      const candidate = candidates[Math.min(idx, candidates.length - 1)];
-      const p = new PeerCtor(undefined, candidate);
+      const candidate = candidates[idx] ?? candidates[candidates.length - 1] ?? fallbackCandidate;
+      const p = new PeerCtor(candidate);
       const onOpen = () => {
         p.off('error', onError);
         resolve(p);
@@ -425,11 +432,18 @@ export async function connectAsJoiner(roomCode: string, myInfo: JoinerMetadata, 
   const PeerCtor = await loadPeerJs();
   const callListeners = new Set<(peerId: string, call: MediaConnection) => void>();
   const candidates = signalingCandidates();
+  const fallbackCandidate: PeerCtorOptions = {
+    host: '0.peerjs.com',
+    port: 443,
+    path: '/peerjs',
+    secure: true,
+    config: defaultIceConfig(),
+  };
 
   const peer = await new Promise<Peer>((resolve, reject) => {
     const tryCandidate = (idx: number, transportRetriesLeft: number) => {
-      const candidate = candidates[Math.min(idx, candidates.length - 1)];
-      const p = new PeerCtor(undefined, candidate);
+      const candidate = candidates[idx] ?? candidates[candidates.length - 1] ?? fallbackCandidate;
+      const p = new PeerCtor(candidate);
       const onOpen = () => {
         p.off('error', onError);
         resolve(p);
