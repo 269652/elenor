@@ -20,18 +20,27 @@ export const BTN_PRIMARY =
 export const BTN_SECONDARY =
   `rounded-sm border border-hx-border bg-hx-panel-2 px-2 py-1.5 text-left text-xs text-hx-ink transition hover:border-hx-gold/50 hover:bg-hx-panel disabled:cursor-not-allowed disabled:opacity-40 ${LIFT}`;
 
+/** [DEFAULT — direct feedback: "Buttons should not have transparency"] Solid hx-blood fill
+ *  instead of a translucent one — was bg-hx-blood/20 (a red wash over whatever panel color sat
+ *  behind it, so its actual shade drifted with context). hover:brightness-110 stands in for the
+ *  "no dedicated -bright token" gap the way bg-hx-gold-bright fills it for BTN_PRIMARY. */
 export const BTN_DANGER =
-  `rounded-sm border border-hx-blood/70 bg-hx-blood/20 px-2 py-1.5 text-xs text-hx-ink transition hover:bg-hx-blood/35 disabled:cursor-not-allowed disabled:opacity-40 ${LIFT}`;
+  `rounded-sm border border-hx-blood bg-hx-blood px-2 py-1.5 text-xs text-hx-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 ${LIFT}`;
 
+/** [DEFAULT — direct feedback: "Buttons should not have transparency"] Was bg-transparent
+ *  (literally see-through the panel behind it) — now a solid, slightly darker-than-panel fill so
+ *  it still reads as visually subordinate to BTN_SECONDARY/BTN_PRIMARY without being transparent. */
 export const BTN_GHOST =
-  `rounded-sm border border-hx-border bg-transparent px-3 py-2 text-xs text-hx-ink-faint transition hover:border-hx-border-strong hover:text-hx-ink disabled:cursor-not-allowed disabled:opacity-40 ${LIFT}`;
+  `rounded-sm border border-hx-border bg-hx-bg px-3 py-2 text-xs text-hx-ink-faint transition hover:border-hx-border-strong hover:bg-hx-panel-2 hover:text-hx-ink disabled:cursor-not-allowed disabled:opacity-40 ${LIFT}`;
 
 /** Same size/weight as BTN_PRIMARY (a real, full-height CTA, not an afterthought) but in the
  *  arcane purple accent instead of gold — for a second first-class option that shouldn't compete
- *  with or be mistaken for the primary one. Translucent rather than solid-filled, so it still
- *  reads as visually subordinate to BTN_PRIMARY at a glance. */
+ *  with or be mistaken for the primary one.
+ *  [DEFAULT — direct feedback: "Buttons should not have transparency"] Solid hx-arcane fill,
+ *  was bg-hx-arcane/15 — kept visually subordinate to BTN_PRIMARY via the plain (non-shimmer)
+ *  hover treatment and purple vs. gold hue, not via transparency. */
 export const BTN_ARCANE =
-  `rounded-sm border border-hx-arcane bg-hx-arcane/15 px-3 py-2 text-sm font-semibold text-hx-ink shadow-[0_0_14px_-4px_rgba(140,108,208,0.6)] transition hover:border-hx-arcane hover:bg-hx-arcane/25 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none ${LIFT}`;
+  `rounded-sm border border-hx-arcane bg-hx-arcane px-3 py-2 text-sm font-semibold text-hx-ink shadow-[0_0_14px_-4px_rgba(140,108,208,0.6)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none ${LIFT}`;
 
 /** A small pill-style variant of BTN_SECONDARY — for compact inline actions (equip/unequip,
  *  deposit) inside a denser layout like HeroPanel's loot list. */

@@ -7,8 +7,10 @@ import { PANEL } from '@/components/uiClasses';
  *  only spendable on the tile the hero is standing on. */
 export function ResourceBar({ player }: { player: Player }) {
   return (
+    // [DEFAULT — direct request: "remove 'Hometown stock' label to save space"] The label row
+    // is gone; the pills below are still individually titled per-resource and the whole strip
+    // now reads compactly enough (icon + number) that the header added little beyond height.
     <div className={`${PANEL} flex flex-col gap-1.5`}>
-      <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">🏠 Hometown stock</span>
       <div className="flex flex-wrap items-center gap-1.5" aria-label="Banked resources">
         {RESOURCE_TYPES.map((r) => (
           <div

@@ -12,7 +12,9 @@ const SHORT_LABEL: Record<Phase, string> = {
   [Phase.Build]: 'Build',
 };
 
-const PHASE_ICON: Record<Phase, string> = {
+// Exported so other panels (GameBoardApp's prominent "current action" callout) can label a
+// phase with the same icon the tracker itself uses, rather than maintaining a second copy.
+export const PHASE_ICON: Record<Phase, string> = {
   [Phase.Production]: '🌾',
   [Phase.DrawAndPlaceTile]: '🗺️',
   [Phase.MoveHero]: '👣',

@@ -5,12 +5,16 @@ import {
   BUILDING_DEFINITIONS,
   CAPITAL_TIERS,
   LOOT_SELL_TROOPS,
+  Phase,
+  ROAD_COST,
   RESOURCE_TYPES,
   SMITHY_CRAFT_COSTS,
   applyMageDiscount,
   classDefFor,
+  edgeKey,
   effectiveTileType,
   hexKey,
+  hexNeighbors,
   maxTierFor,
   nextUpgradeFor,
   produceAmountForTier,
@@ -23,7 +27,7 @@ import {
   type Player,
   type ResourceCost,
 } from '@/engine';
-import { BTN_SECONDARY, INPUT } from '@/components/uiClasses';
+import { BTN_GHOST, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 
 interface BuildMenuProps {
   state: GameState;
@@ -31,6 +35,15 @@ interface BuildMenuProps {
   selectedCoord: HexCoord | null;
   dispatch: (action: Action) => boolean | Promise<boolean>;
   canAct: boolean;
+  // [DEFAULT — UI feedback change, direct request: "this should also go in the buildings panel"
+  // (re: the Roads & supply panel, which used to be its own standalone sidebar panel)] Road-mode
+  // is armed/anchored state that lives in GameBoardApp (it drives the hex board's highlight
+  // overlay too, not just this panel), so it's threaded in as props rather than owned here.
+  roadMode: boolean;
+  roadAnchor: HexCoord | null;
+  roadConnectedCount: number;
+  onRoadArm: () => void;
+  onRoadCancel: () => void;
 }
 
 function costLabel(cost: ResourceCost): string {
@@ -39,14 +52,102 @@ function costLabel(cost: ResourceCost): string {
     .join(' + ') || 'free';
 }
 
-export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: BuildMenuProps) {
+/** [DEFAULT — roads] Hexes that can serve as an end of a NEW road segment. With an anchor
+ *  picked, this narrows to the neighbours that would complete a legal segment; without one it's
+ *  every hex that has at least one such segment left in it. Mirrors applyBuildRoad's rules:
+ *  both ends placed, at least one end owned by the actor, edge not already carrying a road.
+ *
+ *  Exported (not GameBoardApp-local) because GameBoardApp's board-highlight logic ALSO needs it
+ *  (to show which hexes are legal road endpoints while road mode is armed) — importing it from
+ *  here, rather than duplicating it, keeps the two panels' idea of "a legal edge" from drifting
+ *  apart. GameBoardApp already imports BuildMenu itself, so this direction avoids a circular
+ *  import (BuildMenu never imports back from GameBoardApp). */
+export function roadEndpointOptions(state: GameState, player: Player, anchor: HexCoord | null): Set<string> {
+  const options = new Set<string>();
+  const legal = (a: HexCoord, b: HexCoord) => {
+    const ta = state.map[hexKey(a)];
+    const tb = state.map[hexKey(b)];
+    if (!ta || !tb) return false;
+    if (ta.ownerId !== player.id && tb.ownerId !== player.id) return false;
+    return !state.roads?.[edgeKey(a, b)];
+  };
+
+  if (anchor) {
+    for (const n of hexNeighbors(anchor)) if (legal(anchor, n)) options.add(hexKey(n));
+    return options;
+  }
+  for (const tile of Object.values(state.map)) {
+    for (const n of hexNeighbors(tile.coord)) {
+      if (legal(tile.coord, n)) {
+        options.add(hexKey(tile.coord));
+        break;
+      }
+    }
+  }
+  return options;
+}
+
+/** [DEFAULT — direct request: "extra panel with icons for every structure that can be built"]
+ *  One glyph per BuildingType, chosen to be visually distinct from the RESOURCE icons already
+ *  established elsewhere (ResourceBar's 🪵🪨🌽⛏️🥩🪙) so a building tile never gets mistaken for a
+ *  resource readout at a glance, even though a few buildings share a terrain/resource theme. */
+const BUILDING_ICON: Record<BuildingType, string> = {
+  Sawmill: '🪚',
+  HuntingLodge: '🏹',
+  Quarry: '🧱',
+  Farm: '🚜',
+  Windmill: '🎐',
+  Mine: '⚒️',
+  Smithy: '🛠️',
+  TradePost: '🏪',
+  Dock: '⚓',
+  Watchtower: '🗼',
+  Barracks: '🏕️',
+  CowStable: '🐄',
+  Capital: '🏰',
+};
+
+/** Human-readable terrain requirement, for the info modal — mirrors the same allowedTileTypes
+ *  union BuildMenu's own candidate filter already reads, just phrased for a sentence instead of
+ *  a filter check. */
+function terrainLabel(def: (typeof BUILDING_DEFINITIONS)[BuildingType]): string {
+  if (def.allowedTileTypes === 'any') return 'Any owned tile';
+  if (def.allowedTileTypes === 'starting-tile-only') return 'Starting tile only';
+  return def.allowedTileTypes.join(' or ');
+}
+
+export function BuildMenu({
+  state,
+  player,
+  selectedCoord,
+  dispatch,
+  canAct,
+  roadMode,
+  roadAnchor,
+  roadConnectedCount,
+  onRoadArm,
+  onRoadCancel,
+}: BuildMenuProps) {
   const [deployCount, setDeployCount] = useState(1);
+  // [DEFAULT — direct request: "a '?' button on the build CTAs which opens a small modal
+  // explaining what the building does"] Which structure's info modal is open, if any — a single
+  // piece of state is enough since only one can be open at a time.
+  const [infoBuilding, setInfoBuilding] = useState<BuildingType | null>(null);
   const isMage = classDefFor(player).startingBonus.kind === 'Mage';
   const tile = selectedCoord ? state.map[hexKey(selectedCoord)] : undefined;
   const ownsTile = tile && tile.ownerId === player.id;
 
   const hero = player.hero; // v1 simplification: BuildMenu always reasons about the primary hero
   const isLocal = !!selectedCoord && hexKey(selectedCoord) === hexKey(hero.position);
+
+  // [DEFAULT — UI feedback change, direct request: "All building actions should be in an extra
+  // panel ... it should also not be at the bottom of sidebar but rather more prominent"] Every
+  // action this panel offers (Build, UpgradeBuilding, CraftGear, DeploySoldiers, SellLoot) is a
+  // requirePhase(Phase.Build) action in the engine (reducers.ts) — now that this panel stands on
+  // its own instead of living inside PhaseActions' already-phase-gated Build case, it has to
+  // enforce that itself.
+  const isBuildPhase = state.currentPhase === Phase.Build;
+  const canBuild = canAct && isBuildPhase;
 
   /** Mirrors the engine's combinedAfford (engine/reducers.ts): wallet always counts, carried
    *  resources only count when building on the tile the hero is standing on. Purely a UI
@@ -58,37 +159,56 @@ export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: Bu
   const nextCapitalTier = CAPITAL_TIERS[player.capitalTier];
   const isCapitalTile = selectedCoord && hexKey(selectedCoord) === hexKey(player.capitalTile);
 
-  const buildableTypes = (Object.keys(BUILDING_DEFINITIONS) as BuildingType[]).filter((type) => {
-    if (type === 'Capital') return false; // handled separately below
-    const def = BUILDING_DEFINITIONS[type];
-    if (!tile || !ownsTile || tile.building) return false;
-    const effType = effectiveTileType(tile);
-    const allowed = def.allowedTileTypes === 'any' || (Array.isArray(def.allowedTileTypes) && def.allowedTileTypes.includes(effType));
-    if (!allowed) return false;
-    if (def.requiresBuilding && !player.ownedTiles.some((c) => state.map[hexKey(c)]?.building?.type === def.requiresBuilding)) return false;
-    if (def.minRound !== undefined && state.roundNumber < def.minRound) return false;
-    return true;
-  });
+  /** [DEFAULT — UI feedback change, direct request: "show all buildable buildings ... render
+   *  them disabled if anything can't be built (lvl gate, resources) whatsoever"] Every building
+   *  type whose ALLOWED TILE TYPE matches this tile — that's the one filter that stays a hard
+   *  exclusion, because a Sawmill can categorically never go on a Mountain tile no matter what
+   *  phase or round it is, so listing it there would just be noise, not a "gate" the player is
+   *  waiting out. Everything else that used to be a silent filter (round gate, missing
+   *  prerequisite building, insufficient resources) is now a per-candidate reason list instead,
+   *  so every building the tile could EVER host is visible, with the button disabled and an
+   *  explicit "why" the moment it isn't buildable right now. */
+  interface BuildCandidate {
+    type: BuildingType;
+    cost: ResourceCost;
+    reasons: string[]; // empty = buildable right now
+  }
 
-  /** Same eligibility as buildableTypes but specifically the ones held back only by
-   *  minRound — surfaced below so players understand why, e.g., Farm is missing rather than
-   *  assuming a bug. Sorted by unlock round so the compact list reads as a schedule.
-   *  [DEFAULT — balance rework] Now that nearly every producer is round-gated, this list can
-   *  hold as many entries as the buildable list does on an early-round tile, so it renders as
-   *  a single condensed "coming later" block rather than a stack of full-height rows. */
-  const roundGatedTypes = (Object.keys(BUILDING_DEFINITIONS) as BuildingType[])
-    .filter((type) => {
-      if (type === 'Capital') return false;
-      const def = BUILDING_DEFINITIONS[type];
-      if (!tile || !ownsTile || tile.building) return false;
-      if (def.minRound === undefined || state.roundNumber >= def.minRound) return false;
-      const effType = effectiveTileType(tile);
-      const allowed = def.allowedTileTypes === 'any' || (Array.isArray(def.allowedTileTypes) && def.allowedTileTypes.includes(effType));
-      if (!allowed) return false;
-      if (def.requiresBuilding && !player.ownedTiles.some((c) => state.map[hexKey(c)]?.building?.type === def.requiresBuilding)) return false;
-      return true;
-    })
-    .sort((a, b) => (BUILDING_DEFINITIONS[a].minRound ?? 0) - (BUILDING_DEFINITIONS[b].minRound ?? 0));
+  const buildCandidates: BuildCandidate[] =
+    !tile || !ownsTile || tile.building
+      ? []
+      : (Object.keys(BUILDING_DEFINITIONS) as BuildingType[])
+          .filter((type) => {
+            if (type === 'Capital') return false; // handled separately above
+            const def = BUILDING_DEFINITIONS[type];
+            const effType = effectiveTileType(tile);
+            return def.allowedTileTypes === 'any' || (Array.isArray(def.allowedTileTypes) && def.allowedTileTypes.includes(effType));
+          })
+          .map((type) => {
+            const def = BUILDING_DEFINITIONS[type];
+            const cost = isMage ? applyMageDiscount(def.cost) : def.cost;
+            const reasons: string[] = [];
+
+            if (def.minRound !== undefined && state.roundNumber < def.minRound) {
+              reasons.push(`Unlocks round ${def.minRound} (now round ${state.roundNumber})`);
+            }
+            if (def.requiresBuilding && !player.ownedTiles.some((c) => state.map[hexKey(c)]?.building?.type === def.requiresBuilding)) {
+              reasons.push(`Requires a ${def.requiresBuilding} built somewhere first`);
+            }
+            const missing = RESOURCE_TYPES.filter((r) => (cost[r] ?? 0) > player.resources[r] + (isLocal ? hero.carriedResources[r] : 0));
+            if (missing.length > 0) {
+              reasons.push(
+                `Need ${missing
+                  .map((r) => `${(cost[r] ?? 0) - (player.resources[r] + (isLocal ? hero.carriedResources[r] : 0))} more ${r}`)
+                  .join(', ')}`
+              );
+            }
+
+            return { type, cost, reasons };
+          })
+          // Buildable-right-now first, so the useful options aren't buried below a wall of
+          // locked ones; ties keep the catalog's own declaration order.
+          .sort((a, b) => Number(a.reasons.length > 0) - Number(b.reasons.length > 0));
 
   /** Multi-tier buildings (Farm/Quarry run 1→3, CowStable 1→5). Every bit of tier arithmetic
    *  goes through the engine helpers so this panel can never disagree with what
@@ -115,204 +235,366 @@ export function BuildMenu({ state, player, selectedCoord, dispatch, canAct }: Bu
 
   const sellableLoot = isBarracksTile && isLocal ? hero.inventory.filter((c) => !hero.equippedLootIds.includes(c.id)) : [];
 
-  if (!selectedCoord) {
-    return <p className="text-xs text-hx-ink-faint">Select a tile you own on the map to build.</p>;
-  }
+  // Road panel bits — see the props doc comment above for why these live in GameBoardApp instead
+  // of local state.
+  const isRoadMage = classDefFor(player).startingBonus.kind === 'Mage';
+  const roadCost = isRoadMage ? applyMageDiscount(ROAD_COST) : ROAD_COST;
+  const roadWoodNeeded = roadCost.Wood ?? 0;
+  const roadCarried = player.hero.carriedResources.Wood;
+  const roadAffordable = player.resources.Wood + roadCarried >= roadWoodNeeded;
+  const anyRoadEdgeLeft = roadEndpointOptions(state, player, null).size > 0;
+
+  const infoDef = infoBuilding ? BUILDING_DEFINITIONS[infoBuilding] : null;
+  const infoCost = infoDef ? (isMage ? applyMageDiscount(infoDef.cost) : infoDef.cost) : undefined;
 
   return (
-    <div className="flex flex-col gap-3">
-      <p className="flex items-center gap-1.5 rounded-sm border border-hx-border bg-hx-panel-2 px-2.5 py-1.5 text-[11px] text-hx-ink-dim">
-        {isLocal ? (
-          <>💰 Paying with carried resources first, wallet for the rest.</>
-        ) : (
-          <>🏦 Paying from hometown stock only — hero isn&rsquo;t standing here.</>
-        )}
-      </p>
+    <div className={PANEL}>
+      {/* [DEFAULT — direct request: "The build actions panel should not be visible outside build
+          phase"] GameBoardApp only mounts this component during Phase.Build now, so the
+          "locked"/"Build phase only" variant this header and canBuild used to render is gone —
+          isBuildPhase stays as a defensive true-when-mounted check, not a visible state. */}
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <h3 className="font-display text-sm font-bold text-hx-ink">🏗️ Build Actions</h3>
+        <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Phase 5</span>
+      </div>
 
-      {isCapitalTile && nextCapitalTier && (
-        <button
-          type="button"
-          disabled={!canAct || !canAffordHere(nextCapitalTier.cost)}
-          onClick={() => void dispatch({ type: 'Build', actorId: player.id, buildingType: 'Capital', coord: player.capitalTile })}
-          className="flex flex-col gap-1 rounded-sm border border-hx-gold bg-hx-gold px-3 py-2.5 text-left shadow-[0_0_16px_-4px_rgba(217,164,65,0.8)] transition hover:bg-hx-gold-bright disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
-        >
-          <span className="flex items-center justify-between gap-2">
-            <span className="font-display text-base font-bold text-hx-bg">🏰 Upgrade Capital</span>
-            <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">Tier {nextCapitalTier.tier}</span>
-          </span>
-          <span className="text-xs font-medium text-hx-bg/80">{costLabel(isMage ? applyMageDiscount(nextCapitalTier.cost) : nextCapitalTier.cost)}</span>
-        </button>
-      )}
+      {!selectedCoord && <p className="text-xs text-hx-ink-faint">Select a tile you own on the map to build.</p>}
 
-      {upgradableDef &&
-        buildingOnTile &&
-        (nextUpgrade && upgradeCost ? (
-          <button
-            type="button"
-            disabled={!canAct || !canAffordHere(upgradeCost)}
-            onClick={() => void dispatch({ type: 'UpgradeBuilding', actorId: player.id, coord: selectedCoord })}
-            className="flex flex-col gap-1 rounded-sm border border-hx-gold bg-hx-gold px-3 py-2.5 text-left shadow-[0_0_16px_-4px_rgba(217,164,65,0.8)] transition hover:bg-hx-gold-bright disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
-          >
-            <span className="flex items-center justify-between gap-2">
-              <span className="font-display text-base font-bold text-hx-bg">⬆️ Upgrade {buildingOnTile.type}</span>
-              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">
-                Tier {currentTier} / {maxTierFor(upgradableDef)}
-              </span>
-            </span>
-            <span className="text-xs font-medium text-hx-bg/80">{costLabel(upgradeCost)}</span>
-            <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">
-              +{currentProduceAmount}/turn → +{nextUpgrade.produceAmount}/turn (tier {currentTier + 1})
-            </span>
-          </button>
-        ) : (
-          /* Deliberately a static badge, not a hidden button: a max-tier building that simply
-             stops rendering its upgrade row reads as a bug rather than as "done". */
-          <div
-            aria-disabled="true"
-            className="flex flex-col gap-1 rounded-sm border border-hx-gold/40 bg-hx-gold/10 px-3 py-2.5 text-left"
-          >
-            <span className="flex items-center justify-between gap-2">
-              <span className="font-display text-sm font-bold text-hx-gold">✨ {buildingOnTile.type} fully upgraded</span>
-              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-gold/80">
-                Tier {currentTier} / {maxTierFor(upgradableDef)}
-              </span>
-            </span>
-            <span className="text-[11px] text-hx-ink-faint">Max tier reached — producing +{currentProduceAmount}/turn.</span>
-          </div>
-        ))}
+      {selectedCoord && (
+        <div className="flex flex-col gap-3">
+          <p className="flex items-center gap-1.5 rounded-sm border border-hx-border bg-hx-panel-2 px-2.5 py-1.5 text-[11px] text-hx-ink-dim">
+            {isLocal ? (
+              <>💰 Paying with carried resources first, wallet for the rest.</>
+            ) : (
+              <>🏦 Paying from hometown stock only — hero isn&rsquo;t standing here.</>
+            )}
+          </p>
 
-      {isSmithyTile && (
-        <div className="flex flex-col gap-2 rounded-sm border border-hx-arcane/40 bg-hx-arcane/10 p-2.5">
-          <span className="font-mono text-[10px] uppercase tracking-wide text-hx-arcane">⚒️ Smithy — Craft Gear</span>
-          <div className="grid grid-cols-2 gap-1.5">
-            {RARITIES.map((rarity) => {
-              const cost = isMage ? applyMageDiscount(SMITHY_CRAFT_COSTS[rarity]) : SMITHY_CRAFT_COSTS[rarity];
-              return (
-                <button
-                  key={rarity}
-                  type="button"
-                  disabled={!canAct || !canAffordHere(cost)}
-                  onClick={() => void dispatch({ type: 'CraftGear', actorId: player.id, coord: selectedCoord, rarity })}
-                  className="flex flex-col gap-0.5 rounded-sm border border-hx-arcane/60 bg-hx-arcane/15 px-2 py-1.5 text-left transition hover:bg-hx-arcane/25 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <span className="text-xs font-semibold text-hx-ink">{rarity}</span>
-                  <span className="font-mono text-[10px] text-hx-ink-dim">{costLabel(cost)}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {isBarracksTile && (
-        <div className="flex flex-col gap-2 rounded-sm border border-hx-copper/40 bg-hx-copper/10 p-2.5">
-          <span className="font-mono text-[10px] uppercase tracking-wide text-hx-copper">Barracks — Deploy (reserve: {barracksReserve})</span>
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={1}
-              max={barracksReserve}
-              value={deployCount}
-              onChange={(e) => setDeployCount(Math.max(1, Math.min(barracksReserve || 1, Number(e.target.value))))}
-              disabled={barracksReserve === 0}
-              className={`w-14 ${INPUT}`}
-            />
-            {/* toCoord defaults to the Barracks tile itself — garrisoning it in place is a
-                legitimate, useful action on its own. Deploying to a different owned tile would
-                need a second tile-picker this component doesn't support yet; could be added
-                later if the app grows one. */}
+          {isCapitalTile && nextCapitalTier && (
             <button
               type="button"
-              disabled={!canAct || barracksReserve === 0}
-              onClick={() =>
-                void dispatch({
-                  type: 'DeploySoldiers',
-                  actorId: player.id,
-                  fromCoord: selectedCoord,
-                  toCoord: selectedCoord,
-                  count: Math.min(deployCount, barracksReserve),
-                })
-              }
-              className="flex-1 rounded-sm border border-hx-copper/70 bg-hx-copper/20 px-2 py-1.5 text-left text-xs font-semibold text-hx-ink transition hover:bg-hx-copper/35 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!canBuild || !canAffordHere(nextCapitalTier.cost)}
+              onClick={() => void dispatch({ type: 'Build', actorId: player.id, buildingType: 'Capital', coord: player.capitalTile })}
+              className="flex flex-col gap-1 rounded-sm border border-hx-gold bg-hx-gold px-3 py-2.5 text-left shadow-[0_0_16px_-4px_rgba(217,164,65,0.8)] transition hover:bg-hx-gold-bright disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
-              🛡️ Deploy {Math.min(deployCount, barracksReserve)} to garrison
+              <span className="flex items-center justify-between gap-2">
+                <span className="font-display text-base font-bold text-hx-bg">🏰 Upgrade Capital</span>
+                <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">Tier {nextCapitalTier.tier}</span>
+              </span>
+              <span className="text-xs font-medium text-hx-bg/80">{costLabel(isMage ? applyMageDiscount(nextCapitalTier.cost) : nextCapitalTier.cost)}</span>
             </button>
-          </div>
+          )}
 
-          {sellableLoot.length > 0 && (
-            <div className="flex flex-col gap-1.5 border-t border-hx-copper/30 pt-2">
-              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-copper">Sell Loot for Soldiers</span>
-              <div className="flex flex-col gap-1">
-                {sellableLoot.map((card) => (
-                  <button
-                    key={card.id}
-                    type="button"
-                    disabled={!canAct}
-                    onClick={() => void dispatch({ type: 'SellLoot', actorId: player.id, lootCardId: card.id, coord: selectedCoord })}
-                    className="flex items-center justify-between gap-2 rounded-sm border border-hx-copper/50 bg-hx-copper/10 px-2 py-1 text-left transition hover:bg-hx-copper/25 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <span className="truncate text-[11px] text-hx-ink">
-                      {card.name} <span className="text-hx-ink-faint">({card.rarity})</span>
-                    </span>
-                    <span className="shrink-0 font-mono text-[10px] text-hx-ink-dim">+{LOOT_SELL_TROOPS[card.rarity]} 🪖</span>
-                  </button>
-                ))}
+          {upgradableDef &&
+            buildingOnTile &&
+            (nextUpgrade && upgradeCost ? (
+              <button
+                type="button"
+                disabled={!canBuild || !canAffordHere(upgradeCost)}
+                onClick={() => void dispatch({ type: 'UpgradeBuilding', actorId: player.id, coord: selectedCoord })}
+                className="flex flex-col gap-1 rounded-sm border border-hx-gold bg-hx-gold px-3 py-2.5 text-left shadow-[0_0_16px_-4px_rgba(217,164,65,0.8)] transition hover:bg-hx-gold-bright disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="font-display text-base font-bold text-hx-bg">
+                    {BUILDING_ICON[buildingOnTile.type]} Upgrade {buildingOnTile.type}
+                  </span>
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">
+                    Tier {currentTier} / {maxTierFor(upgradableDef)}
+                  </span>
+                </span>
+                <span className="text-xs font-medium text-hx-bg/80">{costLabel(upgradeCost)}</span>
+                <span className="font-mono text-[10px] uppercase tracking-wide text-hx-bg/70">
+                  +{currentProduceAmount}/turn → +{nextUpgrade.produceAmount}/turn (tier {currentTier + 1})
+                </span>
+              </button>
+            ) : (
+              /* Deliberately a static badge, not a hidden button: a max-tier building that simply
+                 stops rendering its upgrade row reads as a bug rather than as "done". */
+              <div
+                aria-disabled="true"
+                className="flex flex-col gap-1 rounded-sm border border-hx-gold/40 bg-hx-gold/10 px-3 py-2.5 text-left"
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="font-display text-sm font-bold text-hx-gold">
+                    ✨ {buildingOnTile.type} fully upgraded
+                  </span>
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-hx-gold/80">
+                    Tier {currentTier} / {maxTierFor(upgradableDef)}
+                  </span>
+                </span>
+                <span className="text-[11px] text-hx-ink-faint">Max tier reached — producing +{currentProduceAmount}/turn.</span>
+              </div>
+            ))}
+
+          {isSmithyTile && (
+            <div className="flex flex-col gap-2 rounded-sm border border-hx-arcane/40 bg-hx-arcane/10 p-2.5">
+              {/* [DEFAULT — direct feedback: "a lot of text doesn't have enough contrast to be
+                  readable"] Was text-hx-arcane on bg-hx-arcane/10 — same-hue-on-itself, well
+                  under WCAG's 4.5:1 minimum. Border keeps the color cue; text goes to full ink. */}
+              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink">🛠️ Smithy — Craft Gear</span>
+              <div className="grid grid-cols-2 gap-1.5">
+                {RARITIES.map((rarity) => {
+                  const cost = isMage ? applyMageDiscount(SMITHY_CRAFT_COSTS[rarity]) : SMITHY_CRAFT_COSTS[rarity];
+                  return (
+                    <button
+                      key={rarity}
+                      type="button"
+                      disabled={!canBuild || !canAffordHere(cost)}
+                      onClick={() => void dispatch({ type: 'CraftGear', actorId: player.id, coord: selectedCoord, rarity })}
+                      className="flex flex-col gap-0.5 rounded-sm border border-hx-arcane bg-hx-arcane px-2 py-1.5 text-left transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <span className="text-xs font-semibold text-hx-ink">{rarity}</span>
+                      <span className="font-mono text-[10px] text-hx-ink">{costLabel(cost)}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
-        </div>
-      )}
 
-      {buildableTypes.length === 0 && !isCapitalTile && <p className="text-xs text-hx-ink-faint">Nothing buildable here right now.</p>}
+          {isBarracksTile && (
+            <div className="flex flex-col gap-2 rounded-sm border border-hx-copper/40 bg-hx-copper/10 p-2.5">
+              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink">Barracks — Deploy (reserve: {barracksReserve})</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={barracksReserve}
+                  value={deployCount}
+                  onChange={(e) => setDeployCount(Math.max(1, Math.min(barracksReserve || 1, Number(e.target.value))))}
+                  disabled={barracksReserve === 0}
+                  className={`w-14 ${INPUT}`}
+                />
+                {/* toCoord defaults to the Barracks tile itself — garrisoning it in place is a
+                    legitimate, useful action on its own. Deploying to a different owned tile would
+                    need a second tile-picker this component doesn't support yet; could be added
+                    later if the app grows one. */}
+                <button
+                  type="button"
+                  disabled={!canBuild || barracksReserve === 0}
+                  onClick={() =>
+                    void dispatch({
+                      type: 'DeploySoldiers',
+                      actorId: player.id,
+                      fromCoord: selectedCoord,
+                      toCoord: selectedCoord,
+                      count: Math.min(deployCount, barracksReserve),
+                    })
+                  }
+                  className="flex-1 rounded-sm border border-hx-copper bg-hx-copper px-2 py-1.5 text-left text-xs font-semibold text-hx-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  🛡️ Deploy {Math.min(deployCount, barracksReserve)} to garrison
+                </button>
+              </div>
 
-      {buildableTypes.length > 0 && (
-        <div className="flex flex-col gap-2">
-          {buildableTypes.map((type) => {
-            const def = BUILDING_DEFINITIONS[type];
-            const cost = isMage ? applyMageDiscount(def.cost) : def.cost;
-            return (
+              {sellableLoot.length > 0 && (
+                <div className="flex flex-col gap-1.5 border-t border-hx-copper/30 pt-2">
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink">Sell Loot for Soldiers</span>
+                  <div className="flex flex-col gap-1">
+                    {sellableLoot.map((card) => (
+                      <button
+                        key={card.id}
+                        type="button"
+                        disabled={!canBuild}
+                        onClick={() => void dispatch({ type: 'SellLoot', actorId: player.id, lootCardId: card.id, coord: selectedCoord })}
+                        className="flex items-center justify-between gap-2 rounded-sm border border-hx-copper bg-hx-copper/80 px-2 py-1 text-left transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <span className="truncate text-[11px] text-hx-ink">
+                          {card.name} <span className="text-hx-ink-dim">({card.rarity})</span>
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] text-hx-ink">+{LOOT_SELL_TROOPS[card.rarity]} 🪖</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {buildCandidates.length === 0 && !isCapitalTile && !upgradableDef && (
+            <p className="text-xs text-hx-ink-faint">
+              {tile?.building
+                ? `A ${tile.building.type} already occupies this tile — one building per tile.`
+                : !tile || !ownsTile
+                  ? 'Select an owned tile to see what can be built there.'
+                  : 'Nothing can ever be built on this tile type.'}
+            </p>
+          )}
+
+          {/* [DEFAULT — direct request: "extra panel with icons for every structure that can be
+              built"] Icon-grid palette instead of a single-column text list — each structure gets
+              a large glyph up top so the whole set reads at a glance, with name/cost/lock-reason
+              underneath. Each tile also carries a "?" info button (direct request: "a '?' button
+              on the build CTAs which opens a small modal explaining what the building does") —
+              a separate nested button, not the tile's own title tooltip, since a tooltip alone
+              isn't reachable on touch and the ask was specifically for a modal. */}
+          {buildCandidates.length > 0 && (
+            <div className="grid grid-cols-2 gap-2">
+              {buildCandidates.map(({ type, cost, reasons }) => {
+                const locked = reasons.length > 0;
+                return (
+                  <div key={type} className="relative">
+                    <button
+                      type="button"
+                      disabled={!canBuild || locked}
+                      title={locked ? reasons.join(' · ') : undefined}
+                      onClick={() => void dispatch({ type: 'Build', actorId: player.id, buildingType: type, coord: selectedCoord })}
+                      className="flex w-full flex-col items-center gap-1 rounded-sm border border-hx-border bg-hx-panel-2 p-2.5 text-center transition hover:border-hx-gold/50 hover:bg-hx-panel disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <span className="text-2xl leading-none" aria-hidden="true">
+                        {BUILDING_ICON[type]}
+                      </span>
+                      <span className="flex items-center gap-1 text-xs font-semibold text-hx-ink">
+                        {locked && <span aria-hidden="true">🔒</span>}
+                        {type}
+                      </span>
+                      <span className="font-mono text-[10px] text-hx-ink-dim">{costLabel(cost)}</span>
+                      {/* [DEFAULT — direct feedback: "a lot of text doesn't have enough contrast
+                          to be readable"] Was text-hx-copper on this tile's neutral dark
+                          bg-hx-panel-2 — copper alone (not tinted) still measured well under
+                          WCAG's 4.5:1 here, and disabled:opacity-40 above only made it worse. */}
+                      {locked && <span className="text-[10px] font-semibold text-hx-gold-bright">{reasons.join(' · ')}</span>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setInfoBuilding(type);
+                      }}
+                      title={`What does ${type} do?`}
+                      aria-label={`What does ${type} do?`}
+                      className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border border-hx-border-strong bg-hx-panel text-[10px] font-bold text-hx-ink-dim transition hover:border-hx-gold hover:text-hx-gold"
+                    >
+                      ?
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* [DEFAULT — UI feedback change, direct request: "this should also go in the buildings
+              panel" (re: the Roads & supply panel)] Merged in as the panel's final section — same
+              content the old standalone RoadPanel rendered, just nested here instead. */}
+          <div className="flex flex-col gap-2 border-t border-hx-border pt-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <h4 className="font-display text-xs font-bold text-hx-ink">🛣️ Roads &amp; supply</h4>
+              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">
+                {roadConnectedCount > 0 ? `${roadConnectedCount} connected` : 'not connected'}
+              </span>
+            </div>
+
+            <p className="text-[11px] text-hx-ink-dim">
+              {roadConnectedCount > 0 ? (
+                <>
+                  <strong className="text-hx-gold">{roadConnectedCount}</strong> tile{roadConnectedCount === 1 ? '' : 's'} joined to your
+                  Capital — their stockpiles are collected straight into your wallet each round, no hero trip needed.
+                </>
+              ) : (
+                <>No tile is joined to your Capital yet. A chain of your own roads over your own tiles auto-collects everything along it each round.</>
+              )}
+            </p>
+
+            <p className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">
+              {costLabel(roadCost)} per segment · you hold {player.resources.Wood} Wood{roadCarried > 0 ? ` (+${roadCarried} carried)` : ''}
+            </p>
+
+            {!roadMode ? (
               <button
-                key={type}
                 type="button"
-                disabled={!canAct || !canAffordHere(cost)}
-                onClick={() => void dispatch({ type: 'Build', actorId: player.id, buildingType: type, coord: selectedCoord })}
-                className={`${BTN_SECONDARY} flex flex-col gap-1`}
+                disabled={!canBuild || !roadAffordable || !anyRoadEdgeLeft}
+                onClick={onRoadArm}
+                className={BTN_SECONDARY}
+                title={
+                  !canAct
+                    ? 'Wait for your turn'
+                    : !isBuildPhase
+                      ? 'Roads can only be laid during the Build phase — advance to Phase 5 first'
+                      : !roadAffordable
+                        ? `Not enough Wood. You need ${roadWoodNeeded} Wood but only have ${player.resources.Wood}${roadCarried > 0 ? ` (${roadCarried} carried)` : ''}`
+                        : !anyRoadEdgeLeft
+                          ? 'Every eligible border already has a road'
+                          : undefined
+                }
               >
-                <span className="flex items-baseline justify-between gap-2">
-                  <span className="text-sm font-semibold text-hx-ink">{type}</span>
-                  <span className="font-mono text-[11px] text-hx-ink-dim">{costLabel(cost)}</span>
-                </span>
-                <span className="text-[11px] text-hx-ink-faint">{def.effectDescription}</span>
+                🛠️ Lay a road ({costLabel(roadCost)})
+                {!isBuildPhase && <span className="text-hx-ink-faint"> — Build phase only</span>}
+                {/* [DEFAULT — direct feedback: "a lot of text doesn't have enough contrast to be
+                    readable"] Was text-hx-blood on this button's neutral bg-hx-panel-2 —
+                    measured well under WCAG's 4.5:1 minimum (blood is a muted red, not built
+                    for text-on-dark). */}
+                {isBuildPhase && !roadAffordable && <span className="text-hx-gold-bright"> — not enough Wood</span>}
+                {isBuildPhase && roadAffordable && !anyRoadEdgeLeft && <span className="text-hx-ink-faint"> — no free borders left</span>}
               </button>
-            );
-          })}
+            ) : (
+              <div className="flex flex-col gap-2 rounded-sm border border-hx-gold/60 bg-hx-gold/10 p-2">
+                <p className="text-[11px] text-hx-ink">
+                  {roadAnchor ? (
+                    <>
+                      Anchored at <span className="font-mono">({roadAnchor.q},{roadAnchor.r})</span> — click a highlighted neighbour to lay the
+                      segment along that border. Click the anchor again to drop it.
+                    </>
+                  ) : (
+                    <>Road mode armed — click a highlighted hex to anchor, then its neighbour. Each segment costs {costLabel(roadCost)}.</>
+                  )}
+                </p>
+                <button type="button" onClick={onRoadCancel} className={BTN_GHOST}>
+                  ✖ Done laying roads
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {roundGatedTypes.length > 0 && (
-        /* One condensed block instead of N full-height disabled buttons. With almost every
-           producer now round-gated, the old one-row-per-building treatment made round-1 tiles
-           read as mostly-locked walls that out-weighed the things you can actually do. This
-           keeps the same "here's why it's missing" answer — name, unlock round, price, current
-           round — at roughly a sixth of the height, with the full effect text on hover/title
-           for anyone planning ahead. */
-        <div className="flex flex-col gap-1.5 rounded-sm border border-hx-border bg-hx-panel-2/60 px-2.5 py-2">
-          <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">
-            🔒 Unlocks here later — round {state.roundNumber} now
-          </span>
-          <ul className="flex flex-col gap-1">
-            {roundGatedTypes.map((type) => {
-              const def = BUILDING_DEFINITIONS[type];
-              return (
-                <li key={type} title={def.effectDescription} className="flex items-baseline justify-between gap-2 text-[11px]">
-                  <span className="text-hx-ink-dim">
-                    <span className="font-mono text-hx-ink-faint">R{def.minRound}</span> {type}
-                  </span>
-                  <span className="font-mono text-[10px] text-hx-ink-faint">{costLabel(def.cost)}</span>
-                </li>
-              );
-            })}
-          </ul>
+      {/* [DEFAULT — direct request: "a '?' button on the build CTAs which opens a small modal
+          explaining what the building does"] A minimal, self-contained modal — dismissed by the
+          backdrop, the ✖ button, or picking a different building's "?". */}
+      {infoDef && infoCost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => setInfoBuilding(null)}
+            className="absolute inset-0 cursor-pointer bg-hx-bg/70 backdrop-blur-[1px]"
+          />
+          <div className="relative z-10 flex w-full max-w-xs flex-col gap-2 rounded-sm border border-hx-gold/60 bg-hx-panel p-4 shadow-[0_8px_28px_-6px_rgba(0,0,0,0.8)]">
+            <div className="flex items-start justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <span className="text-2xl" aria-hidden="true">
+                  {BUILDING_ICON[infoBuilding!]}
+                </span>
+                <span className="font-display text-base font-bold text-hx-ink">{infoBuilding}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setInfoBuilding(null)}
+                aria-label="Close"
+                className="shrink-0 text-hx-ink-faint transition hover:text-hx-ink"
+              >
+                ✖
+              </button>
+            </div>
+            <p className="text-xs text-hx-ink-dim">{infoDef.effectDescription}</p>
+            <div className="flex flex-col gap-1 border-t border-hx-border pt-2 font-mono text-[11px] text-hx-ink-faint">
+              <span>
+                💰 Cost: <span className="text-hx-ink-dim">{costLabel(infoCost)}</span>
+              </span>
+              <span>
+                🗺️ Terrain: <span className="text-hx-ink-dim">{terrainLabel(infoDef)}</span>
+              </span>
+              {infoDef.minRound !== undefined && (
+                <span>
+                  🔓 Unlocks: <span className="text-hx-ink-dim">round {infoDef.minRound}+</span>
+                </span>
+              )}
+              {infoDef.requiresBuilding && (
+                <span>
+                  🏗️ Requires: <span className="text-hx-ink-dim">{infoDef.requiresBuilding} built somewhere first</span>
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

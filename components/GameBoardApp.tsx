@@ -2,15 +2,14 @@
 
 import { useMemo, useState } from 'react';
 import Image from 'next/image';
+import clsx from 'clsx';
 import { SCREEN_ART } from '@/components/screenArt';
 import {
   Phase,
+  PHASE_LABEL,
   RESOURCE_TYPES,
-  ROAD_COST,
-  applyMageDiscount,
   checkMovePath,
   classDefFor,
-  edgeKey,
   garrisonOwnerOf,
   hexKey,
   hexNeighbors,
@@ -23,7 +22,6 @@ import {
   type HexCoord,
   type Player,
   type PlayerId,
-  type ResourceCost,
   type Tile,
   type WinCondition,
 } from '@/engine';
@@ -31,9 +29,9 @@ import { HexBoard } from '@/components/board/HexBoard';
 import { HeroPanel } from '@/components/hero/HeroPanel';
 import { HeroBattleBanner } from '@/components/hero/HeroBattleBanner';
 import { DoorCardPanel, PendingDoorMonsterBanner, isDoorMonsterPendingFor, unvisitedHighlightKeys } from '@/components/hero/DoorCardPanel';
-import { PhaseTracker } from '@/components/hud/PhaseTracker';
+import { PhaseTracker, PHASE_ICON } from '@/components/hud/PhaseTracker';
 import { ResourceBar } from '@/components/hud/ResourceBar';
-import { BuildMenu } from '@/components/build/BuildMenu';
+import { BuildMenu, roadEndpointOptions } from '@/components/build/BuildMenu';
 import { TradePanel } from '@/components/hud/TradePanel';
 import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 import { useAiTurn } from '@/hooks/use-ai-turn';
@@ -103,20 +101,23 @@ interface MarchTarget {
 }
 
 const MARCH_META: Record<MarchOutcome, { icon: string; label: string; className: string }> = {
+  // [DEFAULT — direct feedback: "Buttons should not have transparency"] Solid fills instead of
+  // the previous translucent /15-/20 washes. The inner label spans (below, in the button JSX)
+  // set their own explicit text colors regardless, so no text-color change is needed here.
   reinforce: {
     icon: '🛡️',
     label: 'Reinforce',
-    className: 'border-hx-moss/60 bg-hx-moss/15 hover:bg-hx-moss/25',
+    className: 'border-hx-moss bg-hx-moss hover:brightness-110',
   },
   occupy: {
     icon: '🚩',
     label: 'Occupy',
-    className: 'border-hx-copper/70 bg-hx-copper/15 hover:bg-hx-copper/25',
+    className: 'border-hx-copper bg-hx-copper hover:brightness-110',
   },
   battle: {
     icon: '⚔️',
     label: 'Battle',
-    className: 'border-hx-blood/70 bg-hx-blood/20 hover:bg-hx-blood/35',
+    className: 'border-hx-blood bg-hx-blood hover:brightness-110',
   },
 };
 
@@ -166,40 +167,39 @@ function garrisonsOf(state: GameState, player: Player): Tile[] {
     .sort((a, b) => (b.militiaCount ?? 0) - (a.militiaCount ?? 0));
 }
 
-/** [DEFAULT — roads] Hexes that can serve as an end of a NEW road segment. With an anchor
- *  picked, this narrows to the neighbours that would complete a legal segment; without one it's
- *  every hex that has at least one such segment left in it. Mirrors applyBuildRoad's rules:
- *  both ends placed, at least one end owned by the actor, edge not already carrying a road. */
-function roadEndpointOptions(state: GameState, player: Player, anchor: HexCoord | null): Set<string> {
-  const options = new Set<string>();
-  const legal = (a: HexCoord, b: HexCoord) => {
-    const ta = state.map[hexKey(a)];
-    const tb = state.map[hexKey(b)];
-    if (!ta || !tb) return false;
-    if (ta.ownerId !== player.id && tb.ownerId !== player.id) return false;
-    return !state.roads?.[edgeKey(a, b)];
-  };
-
-  if (anchor) {
-    for (const n of hexNeighbors(anchor)) if (legal(anchor, n)) options.add(hexKey(n));
-    return options;
-  }
-  for (const tile of Object.values(state.map)) {
-    for (const n of hexNeighbors(tile.coord)) {
-      if (legal(tile.coord, n)) {
-        options.add(hexKey(tile.coord));
-        break;
-      }
-    }
-  }
-  return options;
-}
-
-function costLabel(cost: ResourceCost): string {
+/** [DEFAULT — autoplay, direct request: "should be like an iOS checkbox switch not checkbox"]
+ *  A real `<input type="checkbox">` still drives it (visually hidden via `sr-only`, not
+ *  `display:none`, so it stays keyboard-focusable and screen-reader accessible) — the pill track
+ *  and sliding thumb are two sibling spans whose color/position are driven directly off the
+ *  `checked` boolean via `clsx`, the same conditional-className approach the rest of this file
+ *  already uses (e.g. the CTA panel's canAct-driven border below), rather than CSS
+ *  `peer-checked:` — kept it simpler and sidesteps the custom-color-token specificity quirks
+ *  peer-checked ran into against this app's `bg-hx-*` theme tokens. */
+function IosSwitch({ checked, onChange, label }: { checked: boolean; onChange: (next: boolean) => void; label: string }) {
   return (
-    RESOURCE_TYPES.filter((r) => (cost[r] ?? 0) > 0)
-      .map((r) => `${cost[r]} ${r}`)
-      .join(' + ') || 'free'
+    <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-hx-ink-dim">
+      <span className="relative inline-block h-5 w-9 shrink-0">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0"
+        />
+        <span
+          className={clsx(
+            'absolute inset-0 rounded-full transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-hx-gold/50 peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-hx-panel',
+            checked ? 'bg-hx-gold' : 'bg-hx-border-strong'
+          )}
+        />
+        <span
+          className={clsx(
+            'pointer-events-none absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-hx-ink shadow-[0_1px_3px_rgba(0,0,0,0.6)] transition-transform duration-200',
+            checked && 'translate-x-4'
+          )}
+        />
+      </span>
+      {label}
+    </label>
   );
 }
 
@@ -220,10 +220,91 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
   const [roadMode, setRoadMode] = useState(false);
   const [roadAnchor, setRoadAnchor] = useState<HexCoord | null>(null);
 
+  // [DEFAULT — autoplay, direct request: "add an autoplay switch and button which lets human
+  // players let AI play automatically. Button plays current round only; when switch is active
+  // and button pressed it autoplays until switch is deactivated again"] Two independent pieces
+  // of state, matching the two controls: the switch is a per-player MODE PREFERENCE (flipping it
+  // alone does nothing until the button engages autoplay), `autoplayActive` is whether autoplay
+  // is CURRENTLY running. `autoplayEngagedRound` remembers which round it was switched on in, so
+  // single-round mode knows when to stop — see the auto-disable check below.
+  //
+  // [BUG FIX — direct feedback: "the switch is not individual per player .. if I deactivate it
+  // in reds turn it's also deactivated in blues turn"] Originally a single shared boolean, so in
+  // hotseat (where every human seat reuses this same component instance) flipping the switch
+  // during one player's turn silently changed it for every other player too — Red turning
+  // autoplay off left Blue unable to tell the checkbox was never THEIRS to begin with. Keyed by
+  // PlayerId instead: each seat remembers its own preference, independent of whoever last
+  // touched the control.
+  const [continuousByPlayer, setContinuousByPlayer] = useState<Record<PlayerId, boolean>>({});
+  const [autoplayActive, setAutoplayActive] = useState(false);
+  const [autoplayEngagedRound, setAutoplayEngagedRound] = useState<number | null>(null);
+  // [BUG FIX — direct feedback: "it doesn't continue autoplay if continuous is active .. plays
+  // only one round and next one it stops. Continuous should not need another button click in
+  // next round"] Fixed once at the moment the button engages autoplay, from whichever player's
+  // switch was actually on at that instant — deliberately NOT re-derived from
+  // continuousByPlayer[currentPlayerId] on every render. In hotseat, the round boundary lands
+  // exactly when currentPlayerId has already rolled over to the FIRST player of the new round —
+  // who is frequently a DIFFERENT seat than whoever pressed the button, and very possibly one
+  // that never touched their own switch (defaults to off). Re-deriving continuity from that
+  // seat's own preference made a genuinely continuous run stop dead at the very first round
+  // boundary it crossed, unless every single seat happened to also have their own switch on.
+  // This flag is the run's own memory of what mode IT was engaged in, independent of whose turn
+  // it happens to be checked against later.
+  const [runIsContinuous, setRunIsContinuous] = useState(false);
+
   const player = state.players.find((p) => p.id === state.currentPlayerId)!;
   const hero = player.hero;
-  const isAiTurn = aiPlayerIds.has(state.currentPlayerId);
+  // This seat's own switch position — always read fresh off the CURRENT player's id, never off
+  // whoever engaged autoplay, so a run that carries over into a new player's turn immediately
+  // starts respecting THEIR preference instead of the previous player's. Purely a UI display/
+  // press-time value now — see runIsContinuous above for what actually governs an in-progress
+  // run's continuation.
+  const currentPlayerContinuous = continuousByPlayer[state.currentPlayerId] ?? false;
+  // The seat's PERMANENT status, set once at game creation (HotseatSetup's AI toggle) — kept
+  // separate from the EFFECTIVE ai-driven status below so the "AI is thinking" banner can tell a
+  // real AI opponent apart from a human seat that's just delegated this turn to autoplay.
+  const isPermanentAi = aiPlayerIds.has(state.currentPlayerId);
+  // Autoplay only ever drives a seat this client actually controls (isMyTurn) and that isn't
+  // already a permanent AI (which plays itself regardless) — this is what keeps it safe in
+  // online/P2P play: it can never touch another real player's turn, because isMyTurn is false
+  // for those regardless of this client's local autoplay state.
+  const autoplayingThisTurn = autoplayActive && isMyTurn && !isPermanentAi;
+  // New Set identity only when what it CONTAINS actually needs to change (autoplayingThisTurn
+  // flips, the underlying aiPlayerIds prop changes, or the turn moves to a new player) — stable
+  // across the many re-renders a single automated turn produces, so useAiTurn's effect (keyed on
+  // this reference) doesn't tear down and restart every single action tick.
+  const effectiveAiPlayerIds = useMemo(() => {
+    if (!autoplayingThisTurn) return aiPlayerIds;
+    const merged = new Set(aiPlayerIds);
+    merged.add(state.currentPlayerId);
+    return merged;
+  }, [aiPlayerIds, autoplayingThisTurn, state.currentPlayerId]);
+  const isAiTurn = effectiveAiPlayerIds.has(state.currentPlayerId);
   const canAct = isMyTurn && !isAiTurn && !state.winnerId;
+
+  // Single-round mode's stop condition: once the round this was engaged in has passed, drop back
+  // to manual control. Continuous mode has no such check — only an explicit switch-off (see the
+  // IosSwitch onChange below) or the Stop button turns it off; gated on runIsContinuous (the
+  // mode the RUN was engaged in), not the current turn's own preference — see its doc comment
+  // above for why. Render-time state adjustment, same sanctioned pattern as the road-mode guard
+  // right below — this is a direct, synchronous consequence of state.roundNumber advancing, not
+  // an external system to subscribe to.
+  if (autoplayActive && !runIsContinuous && autoplayEngagedRound !== null && state.roundNumber > autoplayEngagedRound) {
+    setAutoplayActive(false);
+    setAutoplayEngagedRound(null);
+  }
+
+  // [DEFAULT — roads, UI feedback change] Roads are now a Build-phase-only action (engine's
+  // applyBuildRoad rejects it elsewhere) — if the turn advances out of Build while road mode is
+  // still armed (e.g. a human left it open, then AdvancePhase fired), drop the mode rather than
+  // leave a control armed for an action the engine will now refuse. React-sanctioned "adjust
+  // state during render" pattern (https://react.dev/reference/react/useState#storing-information-from-previous-renders) —
+  // this only ever fires as a direct consequence of THIS render's own props, so an effect would
+  // just reproduce it one render late.
+  if (roadMode && state.currentPhase !== Phase.Build) {
+    setRoadMode(false);
+    setRoadAnchor(null);
+  }
 
   // Same guard as HexBoard's: roadConnectedTiles walks state.roads, so a pre-roads GameState
   // (older persisted room, hot-reloaded in-memory game) would throw rather than render.
@@ -248,7 +329,12 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
   // footer buttons below need to agree with the engine before the click, not just report its
   // rejection after.
   const doorMonsterPendingForMe = isDoorMonsterPendingFor(state, player);
-  useAiTurn(state, aiPlayerIds, dispatch);
+  // [DEFAULT — direct request: "Next phase should be disabled until drawn a card"] Only live
+  // during Phase 1, and only until a tile has been drawn (pendingTileDraw set) or placed
+  // (hasPlacedTileThisTurn) — the engine itself doesn't require a draw before advancing, but
+  // skipping it silently forfeits Phase 1's entire action, which the UI now refuses to do quietly.
+  const noTileDrawnYet = state.currentPhase === Phase.DrawAndPlaceTile && !state.pendingTileDraw && !state.hasPlacedTileThisTurn;
+  useAiTurn(state, effectiveAiPlayerIds, dispatch);
 
   function clearModes() {
     setMarchFrom(null);
@@ -367,33 +453,56 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
     <>
       <TableBackdrop />
       <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-[1fr_380px]">
-      <div className="min-h-[50vh] overflow-hidden rounded-sm border border-hx-border-strong bg-hx-panel shadow-[0_4px_20px_-6px_rgba(0,0,0,0.6)]">
-        <HexBoard
-          state={state}
-          highlightCoords={highlightCoords}
-          pendingPath={pendingPath}
-          onTileClick={handleTileClick}
-          selectedCoord={selectedCoord}
-          roadConnectedKeys={roadConnectedKeys}
-          roadAnchor={roadMode ? roadAnchor : null}
-          marchFrom={marchFrom}
-          marchColor={player.color}
-          unopenedDoorCoords={unopenedDoorCoords}
-        />
+      {/* [DEFAULT — direct request: "the main left screen should not be scrollable .. zoom out
+          if there's not enough space"] `min-h-0` at both levels here is the actual fix: a flex
+          item's default `min-height: auto` refuses to shrink below its content's intrinsic size,
+          which — combined with the board's old `min-h-[50vh]` FLOOR — forced this column taller
+          than the grid row actually had room for the moment ResourceBar started sharing it,
+          overflowing the viewport and forcing the whole page to scroll. With that floor gone and
+          min-h-0 set, the board container genuinely fills "whatever's left after ResourceBar,"
+          and HexBoard's own SVG viewBox (components/board/HexBoard.tsx) already scales to fit
+          however many tiles are on it — the effective behavior IS "zoom out as the map grows,"
+          it just needs the container to actually hand it a bounded box to zoom into. */}
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        {/* [DEFAULT — UI feedback change, direct request: "move the stock panel from the sidebar
+            to top of left screen to free some space"] ResourceBar is already a compact
+            horizontal bar (flex-wrap of small pills) — moved off the sidebar entirely and onto
+            the map column instead, so the sidebar has one fewer stacked panel. */}
+        <ResourceBar player={player} />
+        <div className="min-h-0 flex-1 overflow-hidden rounded-sm border border-hx-border-strong bg-hx-panel shadow-[0_4px_20px_-6px_rgba(0,0,0,0.6)]">
+          <HexBoard
+            state={state}
+            highlightCoords={highlightCoords}
+            pendingPath={pendingPath}
+            onTileClick={handleTileClick}
+            selectedCoord={selectedCoord}
+            roadConnectedKeys={roadConnectedKeys}
+            roadAnchor={roadMode ? roadAnchor : null}
+            marchFrom={marchFrom}
+            marchColor={player.color}
+            unopenedDoorCoords={unopenedDoorCoords}
+          />
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 overflow-y-auto">
         <div className={PANEL}>
           <PhaseTracker state={state} />
         </div>
-        <ResourceBar player={player} />
+
         {error && (
           <div className="rounded-sm border border-hx-blood/60 bg-hx-blood/15 px-2.5 py-1.5 text-xs text-hx-ink">⚠️ {error}</div>
         )}
         {isAiTurn && (
-          <div className="flex items-center gap-1.5 rounded-sm border border-hx-arcane/50 bg-hx-arcane/15 px-2.5 py-1.5 text-xs text-hx-arcane">
-            <span className="motion-safe:animate-pulse">🤖</span>
-            <span style={{ color: player.color }}>{player.name}</span> is thinking…
+          // [DEFAULT — direct feedback: "a lot of text doesn't have enough contrast to be
+          // readable"] Was text-hx-arcane on bg-hx-arcane/15 — same-hue text on a tinted
+          // background of itself, well under WCAG's 4.5:1 minimum (measured ~2.5:1). The border
+          // still carries the arcane color cue; the text itself is now the high-contrast
+          // default ink color used everywhere else.
+          <div className="flex items-center gap-1.5 rounded-sm border border-hx-arcane/50 bg-hx-arcane/15 px-2.5 py-1.5 text-xs text-hx-ink">
+            <span className="motion-safe:animate-pulse">{isPermanentAi ? '🤖' : '⏩'}</span>
+            <span style={{ color: player.color }}>{player.name}</span>
+            {isPermanentAi ? ' is thinking…' : "'s turn is being autoplayed…"}
           </div>
         )}
         {!isAiTurn && !isMyTurn && (
@@ -402,13 +511,85 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
           </div>
         )}
 
-        <HeroBattleBanner state={state} />
-
-        <HeroPanel player={player} hero={hero} dispatch={dispatch} canAct={canAct} />
-
-        <DoorCardPanel state={state} />
-
+        {/* [DEFAULT — autoplay] Two controls, matching the ask exactly: a switch that only
+            changes MODE (continuous vs single-round) and a button that's the actual go/stop
+            trigger. Placed near the top, close to the phase tracker, since it's a meta-control a
+            player might reach for at any point in their turn — not tied to one specific phase.
+            The switch is THIS PLAYER's own — see currentPlayerContinuous's doc comment above. */}
         <div className={PANEL}>
+          <div className="flex items-center justify-between gap-2">
+            <IosSwitch
+              checked={currentPlayerContinuous}
+              onChange={(next) => {
+                setContinuousByPlayer((prev) => ({ ...prev, [state.currentPlayerId]: next }));
+                // "until switch is deactivated again" — turning it off mid-run is itself the
+                // stop signal for continuous mode, not just a mode change for next time.
+                if (!next && autoplayActive) {
+                  setAutoplayActive(false);
+                  setAutoplayEngagedRound(null);
+                  setRunIsContinuous(false);
+                }
+              }}
+              label="🔁 Continuous"
+            />
+            <button
+              type="button"
+              disabled={!autoplayActive && !canAct}
+              onClick={() => {
+                if (autoplayActive) {
+                  setAutoplayActive(false);
+                  setAutoplayEngagedRound(null);
+                  setRunIsContinuous(false);
+                } else {
+                  setAutoplayActive(true);
+                  setAutoplayEngagedRound(state.roundNumber);
+                  // Captured once, here, from the CURRENT player's switch at press-time — see
+                  // runIsContinuous's doc comment for why this must not be re-derived later.
+                  setRunIsContinuous(currentPlayerContinuous);
+                }
+              }}
+              className={autoplayActive ? BTN_DANGER : BTN_SECONDARY}
+              title={!autoplayActive && !canAct ? "Only available on your own turn" : undefined}
+            >
+              {autoplayActive ? '⏸ Stop autoplay' : currentPlayerContinuous ? '▶ Autoplay' : '▶ Play this round'}
+            </button>
+          </div>
+          {autoplayActive && (
+            <p className="mt-1.5 text-[11px] text-hx-ink-faint">
+              {runIsContinuous
+                ? 'Autoplaying continuously, round after round — flip the switch off to stop.'
+                : `Autoplaying the rest of round ${autoplayEngagedRound} for you.`}
+            </p>
+          )}
+        </div>
+
+        {/* [DEFAULT — UI feedback change, direct request: "make current actions more prominent
+            ... Draw Tile button is buried deep in the menu"] The single most important question
+            on screen — "what do I do right now" — used to be answered by a plain PANEL wrapper
+            sitting below PhaseTracker/HeroBattleBanner/HeroPanel/DoorCardPanel, indistinguishable
+            from any other card. Moved to the top of the action stack (right under the phase
+            tracker) and given its own unmissable treatment: a gold glow + shimmer whenever it's
+            actually this seat's turn to act, an explicit phase icon/name header, and a "Your
+            move" tag so the eye lands here first, not on the board or the resource bar. */}
+        <div
+          className={clsx(
+            'rounded-sm border-2 p-3 transition-shadow',
+            canAct
+              ? 'border-hx-gold bg-hx-gold/10 shadow-[0_0_24px_-6px_rgba(217,164,65,0.6)] motion-safe:animate-shimmer'
+              : 'border-hx-border bg-hx-panel-2/60'
+          )}
+        >
+          <div className="mb-2.5 flex items-center gap-2">
+            <span className="text-lg" aria-hidden="true">
+              {PHASE_ICON[state.currentPhase]}
+            </span>
+            <span className={clsx('font-display text-sm font-bold', canAct ? 'text-hx-gold' : 'text-hx-ink-faint')}>
+              {PHASE_LABEL[state.currentPhase]}
+            </span>
+            {canAct && (
+              <span className="ml-auto font-mono text-[9px] font-bold uppercase tracking-wide text-hx-gold">▶ Your move</span>
+            )}
+          </div>
           <PhaseActions
             state={state}
             player={player}
@@ -429,66 +610,109 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
             dispatch={dispatch}
             canAct={canAct}
           />
-        </div>
 
-        <RoadPanel
-          state={state}
-          player={player}
-          roadMode={roadMode}
-          roadAnchor={roadAnchor}
-          connectedCount={roadConnectedKeys.size}
-          canAct={canAct}
-          onArm={() => {
-            setMarchFrom(null);
-            setPendingAssault(null);
-            setRoadAnchor(null);
-            setRoadMode(true);
-          }}
-          onCancel={() => {
-            setRoadMode(false);
-            setRoadAnchor(null);
-          }}
-        />
+          {/* [DEFAULT — UI feedback change, direct request: "move the next phase and end turn
+              button to the top under available actions"] Right inside the same prominent CTA
+              box as the phase actions themselves — advancing IS the natural next step once
+              those actions are done, so it reads as one continuous flow instead of a control
+              buried at the bottom of a long scrolling sidebar. */}
+          {doorMonsterPendingForMe && (
+            <div className="mt-3 rounded-sm border border-hx-blood/60 bg-hx-blood/15 px-2.5 py-1.5 text-xs text-hx-ink motion-safe:animate-shimmer">
+              🚪👹 A Door monster is still standing in the way — resolve it in the Fight phase before you can end this turn.
+            </div>
+          )}
 
-        <TradePanel player={player} dispatch={dispatch} canAct={canAct} />
+          {/* [DEFAULT — direct request: "Next phase should be disabled until drawn a card"]
+              Phase 1 opens with no tile drawn and nothing placed yet — advancing (or skipping
+              straight to End Turn) before EITHER has happened would silently forfeit the whole
+              phase's action. Cleared the instant a tile is drawn (even before it's placed) or
+              once one has already been placed this turn. */}
+          {noTileDrawnYet && (
+            <p className="mt-3 text-[11px] text-hx-ink-faint">🎴 Draw a tile before advancing.</p>
+          )}
 
-        {doorMonsterPendingForMe && (
-          <div className="rounded-sm border border-hx-blood/60 bg-hx-blood/15 px-2.5 py-1.5 text-xs text-hx-ink motion-safe:animate-shimmer">
-            🚪👹 A Door monster is still standing in the way — resolve it in the Fight phase before you can end this turn.
-          </div>
-        )}
-
-        <button
-          type="button"
-          disabled={!canAct || (doorMonsterPendingForMe && state.currentPhase === Phase.Fight)}
-          title={doorMonsterPendingForMe && state.currentPhase === Phase.Fight ? 'Fight the Door monster before leaving this phase' : undefined}
-          onClick={() => {
-            setSelectedCoord(null);
-            setPendingPath([]);
-            clearModes();
-            void dispatch({ type: 'AdvancePhase', actorId: player.id });
-          }}
-          className={BTN_PRIMARY}
-        >
-          {state.currentPhase === Phase.Build ? 'End Turn ▶' : 'Next Phase ▶'}
-        </button>
-
-        {state.currentPhase !== Phase.Build && (
           <button
             type="button"
-            disabled={!canAct || doorMonsterPendingForMe}
-            title={doorMonsterPendingForMe ? 'Fight the Door monster before ending your turn' : undefined}
+            disabled={!canAct || noTileDrawnYet || (doorMonsterPendingForMe && state.currentPhase === Phase.Fight)}
+            title={
+              noTileDrawnYet
+                ? 'Draw a tile first'
+                : doorMonsterPendingForMe && state.currentPhase === Phase.Fight
+                  ? 'Fight the Door monster before leaving this phase'
+                  : undefined
+            }
             onClick={() => {
               setSelectedCoord(null);
               setPendingPath([]);
               clearModes();
-              void dispatch({ type: 'EndTurn', actorId: player.id });
+              void dispatch({ type: 'AdvancePhase', actorId: player.id });
             }}
-            className={BTN_GHOST}
+            className={clsx(BTN_PRIMARY, 'mt-3 w-full')}
           >
-            ⏭️ End Turn (skip remaining phases)
+            {state.currentPhase === Phase.Build ? 'End Turn ▶' : 'Next Phase ▶'}
           </button>
+
+          {state.currentPhase !== Phase.Build && (
+            <button
+              type="button"
+              disabled={!canAct || noTileDrawnYet || doorMonsterPendingForMe}
+              title={noTileDrawnYet ? 'Draw a tile first' : doorMonsterPendingForMe ? 'Fight the Door monster before ending your turn' : undefined}
+              onClick={() => {
+                setSelectedCoord(null);
+                setPendingPath([]);
+                clearModes();
+                void dispatch({ type: 'EndTurn', actorId: player.id });
+              }}
+              className={clsx(BTN_GHOST, 'mt-2 w-full')}
+            >
+              ⏭️ End Turn (skip remaining phases)
+            </button>
+          )}
+        </div>
+
+        {/* [DEFAULT — UI feedback change, direct request: "All building actions should be in an
+            extra panel with icons for every structure that can be built .. not at the bottom of
+            sidebar but rather more prominent"] Its own standalone panel, positioned right after
+            the main CTA box — high enough to be seen without scrolling, always in the same spot
+            turn after turn, rather than nested at the bottom of whatever else Phase 5's CTA
+            content happened to contain.
+            [DEFAULT — direct request: "The build actions panel should not be visible outside
+            build phase"] Only rendered during Phase 5 now — no longer a stable always-present
+            panel with a "locked" state, just hidden until it's actually relevant. */}
+        {/* [DEFAULT — UI feedback change, direct request: "this should also go in the buildings
+            panel" (re: the Roads & supply panel)] Roads are construction too — merged into
+            BuildMenu as its own section instead of a separate standalone panel, so there's one
+            "everything you can build" panel instead of two. */}
+        {state.currentPhase === Phase.Build && (
+          <BuildMenu
+            state={state}
+            player={player}
+            selectedCoord={selectedCoord}
+            dispatch={dispatch}
+            canAct={canAct}
+            roadMode={roadMode}
+            roadAnchor={roadAnchor}
+            roadConnectedCount={roadConnectedKeys.size}
+            onRoadArm={() => {
+              setMarchFrom(null);
+              setPendingAssault(null);
+              setRoadAnchor(null);
+              setRoadMode(true);
+            }}
+            onRoadCancel={() => {
+              setRoadMode(false);
+              setRoadAnchor(null);
+            }}
+          />
         )}
+
+        <HeroBattleBanner state={state} />
+
+        <HeroPanel player={player} hero={hero} dispatch={dispatch} canAct={canAct} />
+
+        <DoorCardPanel state={state} />
+
+        <TradePanel player={player} dispatch={dispatch} canAct={canAct} />
       </div>
       </div>
     </>
@@ -560,7 +784,7 @@ interface PhaseActionsProps {
 }
 
 function PhaseActions(props: PhaseActionsProps) {
-  const { state, player, selectedCoord, pendingPath, setPendingPath, dispatch, canAct } = props;
+  const { state, player, pendingPath, setPendingPath, dispatch, canAct } = props;
   const hero = player.hero;
 
   switch (state.currentPhase) {
@@ -569,8 +793,17 @@ function PhaseActions(props: PhaseActionsProps) {
         return <p className="text-xs text-hx-ink-faint">Tile placed for this turn — advance to the next phase.</p>;
       }
       if (!state.pendingTileDraw) {
+        // [DEFAULT — UI feedback change, direct request: "Draw Tile button is buried deep in
+        // the menu"] The one and only thing to do to open this phase — promoted to the same
+        // unmissable BTN_PRIMARY treatment as "Confirm Move" and "End Turn" get, instead of the
+        // same quiet BTN_SECONDARY every optional Gather action uses.
         return (
-          <button type="button" disabled={!canAct} onClick={() => void dispatch({ type: 'DrawTile', actorId: player.id })} className={BTN_SECONDARY}>
+          <button
+            type="button"
+            disabled={!canAct}
+            onClick={() => void dispatch({ type: 'DrawTile', actorId: player.id })}
+            className={clsx(BTN_PRIMARY, 'w-full text-center motion-safe:animate-pulse')}
+          >
             🎴 Draw a tile
           </button>
         );
@@ -592,7 +825,7 @@ function PhaseActions(props: PhaseActionsProps) {
               onClick={() =>
                 void Promise.resolve(dispatch({ type: 'MoveHero', actorId: player.id, path: pendingPath })).then((ok) => ok && setPendingPath([]))
               }
-              className="flex-1 rounded-sm border border-hx-arcane bg-hx-arcane/25 px-2 py-1.5 text-xs font-semibold text-hx-ink transition hover:bg-hx-arcane/40 disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex-1 rounded-sm border border-hx-arcane bg-hx-arcane px-2 py-1.5 text-xs font-semibold text-hx-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Confirm Move
             </button>
@@ -611,7 +844,7 @@ function PhaseActions(props: PhaseActionsProps) {
       return (
         <div className="flex flex-col gap-2">
           {fullyLoaded && (
-            <p className="rounded-sm border border-hx-copper/50 bg-hx-copper/10 px-2 py-1.5 text-xs text-hx-copper">
+            <p className="rounded-sm border border-hx-copper/50 bg-hx-copper/10 px-2 py-1.5 text-xs text-hx-ink">
               🎒 Hero is at full carrying capacity — visit your Capital to deposit before gathering more.
             </p>
           )}
@@ -709,14 +942,12 @@ function PhaseActions(props: PhaseActionsProps) {
     }
 
     case Phase.Build:
-      return (
-        <div className="flex flex-col gap-3">
-          <ArmyPanel {...props} />
-          <div className="border-t border-hx-border pt-3">
-            <BuildMenu state={state} player={player} selectedCoord={selectedCoord} dispatch={dispatch} canAct={canAct} />
-          </div>
-        </div>
-      );
+      // [DEFAULT — UI feedback change, direct request: "All building actions should be in an
+      // extra panel ... not at the bottom of sidebar but rather more prominent"] BuildMenu used
+      // to render nested here, inside the CTA box; it's now its own standalone, top-level sidebar
+      // panel (see GameBoardApp's return JSX) so it gets a stable, prominent position instead of
+      // being buried at the bottom of whatever this phase's CTA box happens to contain.
+      return <ArmyPanel {...props} />;
 
     default:
       return null;
@@ -794,7 +1025,7 @@ function ArmyPanel({
                   setMarchCount(t.militiaCount ?? 1);
                 }}
                 className={`w-full rounded-sm border px-2 py-1 text-left text-[11px] transition ${
-                  isOrigin ? 'border-hx-gold bg-hx-gold/15 text-hx-ink' : 'border-hx-border bg-hx-panel-2 text-hx-ink-dim hover:border-hx-gold/50'
+                  isOrigin ? 'border-hx-gold bg-hx-gold text-hx-bg' : 'border-hx-border bg-hx-panel-2 text-hx-ink-dim hover:border-hx-gold/50'
                 }`}
               >
                 <span className="flex items-center justify-between gap-2">
@@ -802,10 +1033,10 @@ function ArmyPanel({
                     <span className="font-mono font-bold" style={{ color: player.color }}>
                       {foreign ? '⚑' : '⚔'} {t.militiaCount}
                     </span>{' '}
-                    {t.type} <span className="font-mono text-hx-ink-faint">({t.coord.q},{t.coord.r})</span>
+                    {t.type} <span className="font-mono text-hx-ink-dim">({t.coord.q},{t.coord.r})</span>
                   </span>
                   {foreign && (
-                    <span className="font-mono text-[9px] uppercase tracking-wide text-hx-copper">
+                    <span className="font-mono text-[9px] uppercase tracking-wide text-hx-gold-bright">
                       holding · R{(t.occupationSinceRound ?? state.roundNumber) + 1}
                     </span>
                   )}
@@ -864,15 +1095,18 @@ function ArmyPanel({
                 onClick={() => onMarchPick(t, origin, count)}
                 className={`flex flex-col gap-0.5 rounded-sm border px-2 py-1.5 text-left transition disabled:cursor-not-allowed disabled:opacity-40 ${meta.className}`}
               >
+                {/* [DEFAULT — direct feedback follow-up] text-hx-ink(-dim/-faint) below was
+                    designed for dark panel backdrops; bumped up a tier now that the buttons
+                    above are solid, saturated fills rather than dark translucent washes. */}
                 <span className="flex items-baseline justify-between gap-2">
                   <span className="text-xs font-semibold text-hx-ink">
                     {meta.icon} {meta.label} → {t.tile.type}
                   </span>
-                  <span className="font-mono text-[10px] text-hx-ink-dim">
+                  <span className="font-mono text-[10px] text-hx-ink">
                     ({t.coord.q},{t.coord.r})
                   </span>
                 </span>
-                <span className="text-[11px] text-hx-ink-faint">{marchBlurb(t, count)}</span>
+                <span className="text-[11px] text-hx-ink-dim">{marchBlurb(t, count)}</span>
               </button>
             );
           })}
@@ -939,92 +1173,6 @@ function ArmyPanel({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/** [DEFAULT — roads] Road laying and the supply network it produces. A free, un-phase-gated
- *  action, so it lives outside the phase panel — and an explicit armed mode with a visible
- *  cancel, because a hidden shift-click would never be found. */
-function RoadPanel({
-  state,
-  player,
-  roadMode,
-  roadAnchor,
-  connectedCount,
-  canAct,
-  onArm,
-  onCancel,
-}: {
-  state: GameState;
-  player: Player;
-  roadMode: boolean;
-  roadAnchor: HexCoord | null;
-  connectedCount: number;
-  canAct: boolean;
-  onArm: () => void;
-  onCancel: () => void;
-}) {
-  const isMage = classDefFor(player).startingBonus.kind === 'Mage';
-  const cost = isMage ? applyMageDiscount(ROAD_COST) : ROAD_COST;
-  const woodNeeded = cost.Wood ?? 0;
-  const carried = player.hero.carriedResources.Wood;
-  const affordable = player.resources.Wood + carried >= woodNeeded;
-  const anyEdgeLeft = roadEndpointOptions(state, player, null).size > 0;
-
-  return (
-    <div className={PANEL}>
-      <div className="flex flex-col gap-2">
-        <div className="flex items-baseline justify-between gap-2">
-          <h3 className="font-display text-sm font-bold text-hx-ink">🛣️ Roads &amp; supply</h3>
-          <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">free action</span>
-        </div>
-
-        <p className="text-[11px] text-hx-ink-dim">
-          {connectedCount > 0 ? (
-            <>
-              <strong className="text-hx-gold">{connectedCount}</strong> tile{connectedCount === 1 ? '' : 's'} joined to your Capital — their
-              stockpiles are collected straight into your wallet each round, no hero trip needed.
-            </>
-          ) : (
-            <>No tile is joined to your Capital yet. A chain of your own roads over your own tiles auto-collects everything along it each round.</>
-          )}
-        </p>
-
-        <p className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">
-          {costLabel(cost)} per segment · you hold {player.resources.Wood} Wood{carried > 0 ? ` (+${carried} carried)` : ''}
-        </p>
-
-        {!roadMode ? (
-          <button
-            type="button"
-            disabled={!canAct || !affordable || !anyEdgeLeft}
-            onClick={onArm}
-            className={BTN_SECONDARY}
-            title={!affordable ? 'Not enough Wood' : !anyEdgeLeft ? 'Every eligible border already has a road' : undefined}
-          >
-            🛠️ Lay a road ({costLabel(cost)})
-            {!affordable && <span className="text-hx-blood"> — not enough Wood</span>}
-            {affordable && !anyEdgeLeft && <span className="text-hx-ink-faint"> — no free borders left</span>}
-          </button>
-        ) : (
-          <div className="flex flex-col gap-2 rounded-sm border border-hx-gold/60 bg-hx-gold/10 p-2">
-            <p className="text-[11px] text-hx-ink">
-              {roadAnchor ? (
-                <>
-                  Anchored at <span className="font-mono">({roadAnchor.q},{roadAnchor.r})</span> — click a highlighted neighbour to lay the segment
-                  along that border. Click the anchor again to drop it.
-                </>
-              ) : (
-                <>Road mode armed — click a highlighted hex to anchor, then its neighbour. Each segment costs {costLabel(cost)}.</>
-              )}
-            </p>
-            <button type="button" onClick={onCancel} className={BTN_GHOST}>
-              ✖ Done laying roads
-            </button>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

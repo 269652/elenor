@@ -44,6 +44,18 @@ export function useAiTurn(state: GameState, aiPlayerIds: ReadonlySet<PlayerId>, 
     dispatchRef.current = dispatch;
   });
 
+  // [DEFAULT — autoplay bugfix] Depend on a derived, content-based key rather than the Set
+  // object's identity. A caller that recomputes `aiPlayerIds` with useMemo (e.g. GameBoardApp's
+  // autoplay feature, which unions in the current player's id only while autoplay is engaged)
+  // can legitimately hand this hook a BRAND NEW Set instance every render even when its members
+  // haven't changed — React's default dependency comparison (Object.is) treats that as "changed"
+  // regardless, tearing the effect down and rescheduling its setTimeout on every single render.
+  // Observed: with the autoplay feature this fired fast enough that step()'s 550ms timer never
+  // survived to actually execute — the AI turn froze completely, going from a smoothly ticking
+  // loop to a hang. Sorting first makes the key order-independent, since a Set's own iteration
+  // order isn't a meaningful part of its identity here.
+  const aiPlayerIdsKey = Array.from(aiPlayerIds).sort().join(',');
+
   useEffect(() => {
     if (state.winnerId) return;
     if (!aiPlayerIds.has(state.currentPlayerId)) return;
@@ -100,5 +112,7 @@ export function useAiTurn(state: GameState, aiPlayerIds: ReadonlySet<PlayerId>, 
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [state.currentPlayerId, state.winnerId, aiPlayerIds]);
+    // aiPlayerIdsKey stands in for aiPlayerIds by design; see its doc comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.currentPlayerId, state.winnerId, aiPlayerIdsKey]);
 }

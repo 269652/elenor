@@ -79,14 +79,18 @@ export function decideAction(state: GameState, playerId: PlayerId): Action {
   const equip = considerEquip(player);
   if (equip) return equip;
 
-  // [DEFAULT — roads] Deliberately ahead of every phase decision, and deliberately above the
-  // Barracks earmark for the first few segments. A road is 1 Wood and it permanently deletes a
-  // hero round-trip: the tile it reaches banks its whole stockpile every round by itself from
-  // then on. Nothing else this AI can buy for 1 resource compounds like that, and a measured
-  // 6-seed sweep of the previous version built ZERO roads across every game — the network is
-  // worthless if you never lay the first segment. Bounded, see considerBuildRoad.
-  const road = considerBuildRoad(state, player);
-  if (road) return road;
+  // [DEFAULT — roads, UI feedback change] Roads are now Build-phase only (direct design
+  // feedback: laying supply infrastructure should read as a Build-phase decision, not something
+  // that can interrupt Move/Gather/Fight mid-phase — see applyBuildRoad's requirePhase in
+  // reducers.ts, which now rejects a BuildRoad dispatched from any other phase). Still checked
+  // ahead of decideBuild's own spending logic and ahead of the Barracks earmark for the first
+  // few segments — a road is 1 Wood and it permanently deletes a hero round-trip: the tile it
+  // reaches banks its whole stockpile every round by itself from then on. Bounded, see
+  // considerBuildRoad.
+  if (state.currentPhase === Phase.Build) {
+    const road = considerBuildRoad(state, player);
+    if (road) return road;
+  }
 
   switch (state.currentPhase) {
     case Phase.DrawAndPlaceTile:
@@ -616,9 +620,18 @@ function scoreDestination(
 
   // A hero with little room left to gather is more valuable heading home to bank what they're
   // carrying than pushing further out — otherwise the AI happily wanders away from a full
-  // sack forever, since nothing else in the score function ever points it back.
-  if (remainingCarryCapacity(player.hero) <= 1 && totalCarried(player.hero) > 0 && samePos(coord, player.capitalTile)) {
-    score += 5;
+  // sack forever, since nothing else in the score function ever points it back. When capacity
+  // is ZERO (not just low), the hero can't gather AT ALL, so the pull to home is critical.
+  if (remainingCarryCapacity(player.hero) <= 1 && totalCarried(player.hero) > 0) {
+    if (samePos(coord, player.capitalTile)) {
+      score += 5; // strongly prefer to stay/be at capital
+    } else {
+      // Distance-decayed pull toward capital proportional to how full the hero is.
+      // At full capacity (0 remaining), this becomes a strong pull that outbids most other
+      // choices, so the hero doesn't get stuck unable to gather and unable to move.
+      const homewardPull = 4.5 - hexDistance(coord, player.capitalTile) * 0.7;
+      if (homewardPull > 0) score += homewardPull;
+    }
   }
 
   // [DEFAULT — roads] A road-connected tile is swept into the wallet automatically at the start of

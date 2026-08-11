@@ -31,10 +31,18 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import type { GameState, HeroState, Player } from '@/engine';
+import { getMonsterById, type GameState, type HeroState, type LootCard, type Player } from '@/engine';
 
 function heroesOf(player: Player): HeroState[] {
   return [player.hero];
+}
+
+function safeGetMonster(id: string) {
+  try {
+    return getMonsterById(id);
+  } catch {
+    return undefined;
+  }
 }
 
 interface CombatResolvedPayload {
@@ -44,6 +52,18 @@ interface CombatResolvedPayload {
   defenderHeroOutcome?: unknown;
   attackerHeroDamage?: unknown;
   defenderHeroDamage?: unknown;
+  // [DEFAULT — UI feedback change] HeroVsMonster / TameVolcano fields — see reducers.ts's
+  // applyFightMonster/applyTameVolcano, which now push these directly rather than making the UI
+  // reconstruct them by diffing hero state (unreliable on a knockout: hp goes UP, not down, once
+  // applyHeroDamage's clamp resets it to max and teleports the hero home).
+  win?: unknown;
+  monsterId?: unknown;
+  source?: unknown;
+  xpGained?: unknown;
+  hpDamage?: unknown;
+  wasKnockedOut?: unknown;
+  curseCardId?: unknown;
+  lootCardId?: unknown;
 }
 
 interface HeroDiedPayload {
@@ -54,7 +74,35 @@ interface HeroDiedPayload {
 type BattleNotice =
   | { kind: 'won'; playerName: string; playerColor: string; xp: number }
   | { kind: 'hurt'; playerName: string; playerColor: string; damage: number; hp: number; maxHp: number }
-  | { kind: 'died'; playerName: string; playerColor: string };
+  | { kind: 'died'; playerName: string; playerColor: string }
+  // [DEFAULT — UI feedback change, direct request: "not obvious what happens when you fight a
+  // door monster or whether you got loot or died"] HeroVsMonster/TameVolcano outcomes — same
+  // banner mechanism as the Army-vs-Territory notices above, generalized to the OTHER two combat
+  // types nothing was showing feedback for at all.
+  | {
+      kind: 'monsterWon';
+      playerName: string;
+      playerColor: string;
+      monsterName: string;
+      monsterLevel: number;
+      source: 'RuinsDen' | 'Door';
+      xp: number;
+      loot: LootCard | null;
+    }
+  | {
+      kind: 'monsterLost';
+      playerName: string;
+      playerColor: string;
+      monsterName: string;
+      monsterLevel: number;
+      source: 'RuinsDen' | 'Door';
+      damage: number;
+      knockedOut: boolean;
+      curseName: string | null;
+      curseEffect: string | null;
+    }
+  | { kind: 'volcanoWon'; playerName: string; playerColor: string; loot: LootCard | null }
+  | { kind: 'volcanoLost'; playerName: string; playerColor: string; damage: number; knockedOut: boolean; curseName: string | null; curseEffect: string | null };
 
 interface QueuedNotice {
   seq: string;
@@ -103,6 +151,75 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
       for (const evt of newEvents) {
         if (evt.type !== 'CombatResolved') continue;
         const payload = evt.payload as CombatResolvedPayload;
+
+        // [DEFAULT — UI feedback change] HeroVsMonster (Ruins Den or Door) and TameVolcano: the
+        // acting player's own hero is always the one who fought (no attacker/defender split like
+        // ArmyVsTerritory below), and every number needed is now on the payload directly — see
+        // applyFightMonster/applyTameVolcano in reducers.ts.
+        if (payload.combatType === 'HeroVsMonster' || payload.combatType === 'TameVolcano') {
+          const playerId = evt.actorId;
+          if (playerId === 'system') continue;
+          const player = state.players.find((p) => p.id === playerId);
+          if (!player) continue;
+          const hero = player.hero;
+          const win = payload.win === true;
+          const seq = `battle-${evt.seq}`;
+
+          const lootCardId = typeof payload.lootCardId === 'string' ? payload.lootCardId : null;
+          const loot = lootCardId ? hero.inventory.find((c) => c.id === lootCardId) ?? null : null;
+          const curseCardId = typeof payload.curseCardId === 'string' ? payload.curseCardId : null;
+          const curse = curseCardId ? hero.activeCurses.find((c) => c.id === curseCardId) ?? null : null;
+          const damage = typeof payload.hpDamage === 'number' ? payload.hpDamage : 0;
+          const knockedOut = payload.wasKnockedOut === true;
+
+          if (payload.combatType === 'HeroVsMonster') {
+            const monsterId = typeof payload.monsterId === 'string' ? payload.monsterId : undefined;
+            const monster = monsterId ? safeGetMonster(monsterId) : undefined;
+            const monsterName = monster?.name ?? 'the monster';
+            const monsterLevel = monster?.level ?? 1;
+            const source = payload.source === 'Door' ? 'Door' : 'RuinsDen';
+            if (win) {
+              const xp = typeof payload.xpGained === 'number' ? payload.xpGained : 0;
+              notices.push({ seq, notice: { kind: 'monsterWon', playerName: player.name, playerColor: player.color, monsterName, monsterLevel, source, xp, loot } });
+            } else {
+              notices.push({
+                seq,
+                notice: {
+                  kind: 'monsterLost',
+                  playerName: player.name,
+                  playerColor: player.color,
+                  monsterName,
+                  monsterLevel,
+                  source,
+                  damage,
+                  knockedOut,
+                  curseName: curse?.name ?? null,
+                  curseEffect: curse?.effectDescription ?? null,
+                },
+              });
+            }
+          } else {
+            // TameVolcano
+            if (win) {
+              notices.push({ seq, notice: { kind: 'volcanoWon', playerName: player.name, playerColor: player.color, loot } });
+            } else {
+              notices.push({
+                seq,
+                notice: {
+                  kind: 'volcanoLost',
+                  playerName: player.name,
+                  playerColor: player.color,
+                  damage,
+                  knockedOut,
+                  curseName: curse?.name ?? null,
+                  curseEffect: curse?.effectDescription ?? null,
+                },
+              });
+            }
+          }
+          continue;
+        }
+
         if (payload.combatType !== 'ArmyVsTerritory') continue;
 
         const sides = [
@@ -198,6 +315,101 @@ export function HeroBattleBanner({ state }: { state: GameState }) {
     );
   }
 
+  // [DEFAULT — UI feedback change] HeroVsMonster win — "not obvious whether you got loot" is
+  // exactly what this closes: XP, source (door vs. den), and the drawn Loot card's name/rarity
+  // all in one line.
+  if (notice.kind === 'monsterWon') {
+    return (
+      <div className="flex items-center gap-2 rounded-sm border border-hx-moss/60 bg-hx-moss/15 px-2.5 py-1.5 text-xs text-hx-ink">
+        <span aria-hidden="true">{notice.source === 'Door' ? '🚪⚔️' : '⚔️'}</span>
+        <span className="flex-1">
+          <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s hero defeated {notice.monsterName} (Lv {notice.monsterLevel}) — +
+          {notice.xp} XP
+          {notice.loot && (
+            <>
+              , found <strong className="text-hx-gold">{notice.loot.rarity} {notice.loot.name}</strong>
+            </>
+          )}
+        </span>
+        <button type="button" onClick={dismiss} className="shrink-0 text-hx-ink-faint transition hover:text-hx-ink" aria-label="Dismiss">
+          ✖
+        </button>
+      </div>
+    );
+  }
+
+  // HeroVsMonster loss — either a straight HP hit, or a full knockout (healed to max, hauled
+  // home), plus whichever Bad Stuff curse got drawn.
+  if (notice.kind === 'monsterLost') {
+    return (
+      <div className="flex items-start gap-2 rounded-sm border border-hx-copper/60 bg-hx-copper/15 px-2.5 py-1.5 text-xs text-hx-ink">
+        <span aria-hidden="true">{notice.source === 'Door' ? '🚪🩸' : '🩸'}</span>
+        <span className="flex-1">
+          <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s hero was bested by {notice.monsterName} (Lv {notice.monsterLevel}) —{' '}
+          {notice.knockedOut ? (
+            <>knocked out and dragged home, full HP restored</>
+          ) : (
+            <>took {notice.damage} HP damage</>
+          )}
+          {notice.curseName && (
+            <span className="block text-[10px] text-hx-blood">
+              Cursed: <strong>{notice.curseName}</strong>
+              {notice.curseEffect && <> — {notice.curseEffect}</>}
+            </span>
+          )}
+        </span>
+        <button type="button" onClick={dismiss} className="shrink-0 text-hx-ink-faint transition hover:text-hx-ink" aria-label="Dismiss">
+          ✖
+        </button>
+      </div>
+    );
+  }
+
+  if (notice.kind === 'volcanoWon') {
+    return (
+      <div className="flex items-center gap-2 rounded-sm border border-hx-gold/60 bg-hx-gold/15 px-2.5 py-1.5 text-xs text-hx-ink">
+        <span aria-hidden="true">🌋</span>
+        <span className="flex-1">
+          <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s hero tamed the Volcano! +5 Gold
+          {notice.loot && (
+            <>
+              , found <strong className="text-hx-gold">Legendary {notice.loot.name}</strong>
+            </>
+          )}
+        </span>
+        <button type="button" onClick={dismiss} className="shrink-0 text-hx-ink-faint transition hover:text-hx-ink" aria-label="Dismiss">
+          ✖
+        </button>
+      </div>
+    );
+  }
+
+  if (notice.kind === 'volcanoLost') {
+    return (
+      <div className="flex items-start gap-2 rounded-sm border border-hx-copper/60 bg-hx-copper/15 px-2.5 py-1.5 text-xs text-hx-ink">
+        <span aria-hidden="true">🌋🩸</span>
+        <span className="flex-1">
+          <span style={{ color: notice.playerColor }}>{notice.playerName}</span>&rsquo;s hero failed to tame the Volcano —{' '}
+          {notice.knockedOut ? (
+            <>knocked out and dragged home, full HP restored</>
+          ) : (
+            <>took {notice.damage} HP damage</>
+          )}
+          {notice.curseName && (
+            <span className="block text-[10px] text-hx-blood">
+              Cursed: <strong>{notice.curseName}</strong>
+              {notice.curseEffect && <> — {notice.curseEffect}</>}
+            </span>
+          )}
+        </span>
+        <button type="button" onClick={dismiss} className="shrink-0 text-hx-ink-faint transition hover:text-hx-ink" aria-label="Dismiss">
+          ✖
+        </button>
+      </div>
+    );
+  }
+
+  // Only 'hurt' (Army vs Territory scrape) remains.
   return (
     <div className="flex items-center gap-2 rounded-sm border border-hx-copper/60 bg-hx-copper/15 px-2.5 py-1.5 text-xs text-hx-ink">
       <span aria-hidden="true">🩸</span>

@@ -896,18 +896,40 @@ function applyFightMonster(state: GameState, action: Extract<FightAction, { comb
     const outcome = resolveHeroVsMonster(h, p, monster, rng);
     const draftTile = findTileMut(draft, action.coord);
 
+    // [DEFAULT — UI feedback change] Richer payload so the UI (HeroBattleBanner.tsx) can show a
+    // real outcome ("won: +N XP, drew a Rare Loot card" / "lost: took N damage, cursed with
+    // Twisted Ankle") instead of nothing. totalHpDamage/wasKnockedOut/curseCardId are computed
+    // HERE rather than left for the UI to reconstruct by diffing hero.hp, because
+    // applyHeroDamage's knockout clamp (hp <= 0 -> reset to maxHp, teleport to Capital) makes a
+    // naive before/after diff read backwards (hp goes UP, not down) on exactly the case that
+    // matters most.
+    let curseCardId: string | null = null;
+    let lootCardId: string | null = null;
+    let totalHpDamage = 0;
+    let wasKnockedOut = false;
+
     if (outcome.win) {
       grantXp(h, outcome.xpGained);
       const rarity = lootRarityForMonsterLevel(monster.level);
       const { card, deck } = drawLoot(draft.lootDeck, rarity, rng);
       draft.lootDeck = deck;
-      if (card) h.inventory.push(card); // rarity exhausted — the win still stands, see drawLoot
+      if (card) {
+        h.inventory.push(card); // rarity exhausted — the win still stands, see drawLoot
+        lootCardId = card.id;
+      }
     } else {
+      if (h.hp - outcome.hpDamage <= 0) wasKnockedOut = true;
       applyHeroDamage(h, p.capitalTile, outcome.hpDamage);
+      totalHpDamage += outcome.hpDamage;
       const { card, deck } = drawBadStuff(draft.badStuffDeck, rng);
       draft.badStuffDeck = deck;
       h.activeCurses.push(card);
-      if (card.hpDamage) applyHeroDamage(h, p.capitalTile, card.hpDamage);
+      curseCardId = card.id;
+      if (card.hpDamage) {
+        if (h.hp - card.hpDamage <= 0) wasKnockedOut = true;
+        applyHeroDamage(h, p.capitalTile, card.hpDamage);
+        totalHpDamage += card.hpDamage;
+      }
     }
 
     // Resolve the SOURCE regardless of win/lose — a Ruins Den only clears on a WIN (it keeps
@@ -931,6 +953,11 @@ function applyFightMonster(state: GameState, action: Extract<FightAction, { comb
       win: outcome.win,
       roll: outcome.roll,
       source: ruinsSource ? 'RuinsDen' : 'Door',
+      xpGained: outcome.win ? outcome.xpGained : 0,
+      hpDamage: totalHpDamage,
+      wasKnockedOut,
+      curseCardId,
+      lootCardId,
     });
   });
 }
@@ -998,22 +1025,41 @@ function applyTameVolcano(state: GameState, action: Extract<FightAction, { comba
     const outcome = resolveTameVolcano(h, p, rng);
     const draftTile = findTileMut(draft, action.coord);
 
+    // [DEFAULT — UI feedback change] Same rationale as applyFightMonster above — see its comment.
+    let curseCardId: string | null = null;
+    let lootCardId: string | null = null;
+    let wasKnockedOut = false;
+
     if (outcome.win) {
       draftTile.isTamed = true;
       addToCarried(h, 'Gold', 5); // one-time cache — carried, same as any other pickup
       const { card, deck } = drawLoot(draft.lootDeck, 'Legendary', rng);
       draft.lootDeck = deck;
-      if (card) h.inventory.push(card); // rarity exhausted — the tame still stands, see drawLoot
+      if (card) {
+        h.inventory.push(card); // rarity exhausted — the tame still stands, see drawLoot
+        lootCardId = card.id;
+      }
     } else {
+      if (h.hp - outcome.hpDamage <= 0) wasKnockedOut = true;
       applyHeroDamage(h, p.capitalTile, outcome.hpDamage);
       const { card, deck } = drawBadStuff(draft.badStuffDeck, rng);
       draft.badStuffDeck = deck;
       h.activeCurses.push(card);
+      curseCardId = card.id;
     }
 
     draft.rngCursor = rng.cursor;
     draft.hasFoughtThisTurn = true;
-    pushEvent(draft, action.actorId, 'CombatResolved', { combatType: 'TameVolcano', win: outcome.win, roll: outcome.roll });
+    pushEvent(draft, action.actorId, 'CombatResolved', {
+      combatType: 'TameVolcano',
+      win: outcome.win,
+      roll: outcome.roll,
+      hpDamage: outcome.win ? 0 : outcome.hpDamage,
+      wasKnockedOut,
+      curseCardId,
+      lootCardId,
+      goldGained: outcome.win ? 5 : 0,
+    });
   });
 }
 
@@ -1243,9 +1289,14 @@ export function applySellLoot(state: GameState, action: SellLootAction): GameSta
 }
 
 /** [DEFAULT — roads] Lays one road segment along a tile edge — see BuildRoadAction in types.ts.
- *  Free action: not phase-gated and doesn't consume the Build slot. */
+ *  Free action in the sense that it never consumes the turn's one Build slot (hasBuiltThisTurn
+ *  is untouched, and any number of segments may be laid in one turn) — but, per direct design
+ *  feedback, it IS phase-gated: roads may only be laid during Phase 5 (Build), same as every
+ *  other construction decision, so laying supply infrastructure reads as a Build-phase choice
+ *  rather than something that can interrupt Move/Gather/Fight mid-phase. */
 export function applyBuildRoad(state: GameState, action: BuildRoadAction): GameState {
   requireCurrentPlayer(state, action.actorId);
+  requirePhase(state, Phase.Build);
   if (!isAdjacent(action.from, action.to)) throw new IllegalActionError('A road connects two ADJACENT hexes');
   const fromTile = tileAt(state, action.from);
   const toTile = tileAt(state, action.to);

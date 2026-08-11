@@ -162,7 +162,7 @@ export function PendingDoorMonsterBanner({
             heroId,
           })
         }
-        className={clsx(BTN_DANGER, 'border-hx-blood bg-hx-blood/40 text-center text-sm font-bold hover:bg-hx-blood/55')}
+        className={clsx(BTN_DANGER, 'text-center text-sm font-bold')}
       >
         ⚔️ Fight {monster ? monster.name : 'the Monster'}!
       </button>

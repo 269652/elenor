@@ -240,17 +240,25 @@ describe('BuildRoad: rejections', () => {
   });
 });
 
-describe('BuildRoad is a FREE action', () => {
-  it.each([Phase.Production, Phase.DrawAndPlaceTile, Phase.MoveHero, Phase.Gather, Phase.Fight, Phase.Build])(
-    'works in phase %i — roads are not phase-gated',
+describe('BuildRoad: Build-phase only', () => {
+  it.each([Phase.Production, Phase.DrawAndPlaceTile, Phase.MoveHero, Phase.Gather, Phase.Fight])(
+    'rejects a road laid in phase %i — roads are Build-phase only',
     (phase) => {
       const state = networkFixture({ wood: 5, state: { currentPhase: phase } });
-      const after = applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A });
-      expect(after.roads[edgeKey(CAPITAL, A)]).toBe('p1');
-      expect(after.currentPhase).toBe(phase); // building a road doesn't advance anything
+      expect(() => applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A })).toThrow(IllegalActionError);
+      expect(() => applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A })).toThrow(/Build/);
     }
   );
 
+  it('works in Phase.Build and does not advance the phase itself', () => {
+    const state = networkFixture({ wood: 5, state: { currentPhase: Phase.Build } });
+    const after = applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A });
+    expect(after.roads[edgeKey(CAPITAL, A)]).toBe('p1');
+    expect(after.currentPhase).toBe(Phase.Build);
+  });
+});
+
+describe('BuildRoad does not consume the Build slot', () => {
   it('does not consume the one-build-per-turn slot, so a whole network can go up in one turn', () => {
     const state = networkFixture({ wood: 5 });
     let s = applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A });

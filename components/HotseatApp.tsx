@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import Image from 'next/image';
 import { createGame, type PlayerId, type SetupPlayerInput } from '@/engine';
 import { useLocalGame } from '@/hooks/use-local-game';
-import { HotseatSetup, type HotseatPlayerSetup } from '@/components/lobby/HotseatSetup';
+import { HotseatSetup, type HotseatPlayerSetup, type HotseatStartPayload } from '@/components/lobby/HotseatSetup';
 import { GameBoardApp } from '@/components/GameBoardApp';
 import { SCREEN_ART } from '@/components/screenArt';
 
@@ -19,18 +19,18 @@ function LocalGame({ players, aiPlayerIds }: { players: SetupPlayerInput[]; aiPl
 }
 
 export function HotseatApp() {
-  const [setup, setSetup] = useState<HotseatPlayerSetup[] | null>(null);
+  const [payload, setPayload] = useState<HotseatStartPayload | null>(null);
 
   const players = useMemo<SetupPlayerInput[] | null>(
-    () => setup?.map((p) => ({ id: p.id, name: p.name, color: p.color, classId: p.classId })) ?? null,
-    [setup]
+    () => payload?.players?.map((p) => ({ id: p.id, name: p.name, color: p.color, classId: p.classId })) ?? null,
+    [payload]
   );
   const aiPlayerIds = useMemo<ReadonlySet<PlayerId>>(
-    () => new Set((setup ?? []).filter((p) => p.isAI).map((p) => p.id)),
-    [setup]
+    () => new Set((payload?.players ?? []).filter((p) => p.isAI).map((p) => p.id)),
+    [payload]
   );
 
-  if (!setup || !players) {
+  if (!payload || !players) {
     return (
       <div className="relative flex h-full w-full items-center justify-center overflow-hidden p-4">
         {/* Full-bleed hero art, same treatment as the main menu (LandingPage.tsx) — centered,
@@ -58,7 +58,7 @@ export function HotseatApp() {
           </>
         )}
         <div className="relative z-10">
-          <HotseatSetup onStart={setSetup} />
+          <HotseatSetup onStart={setPayload} />
         </div>
       </div>
     );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, createGame, hexKey, hexNeighbors, roadConnectedTiles, IllegalActionError, type GameEvent, type GameState } from '@/engine';
+import { applyAction, createGame, hexKey, hexNeighbors, roadConnectedTiles, IllegalActionError, Phase, type GameEvent, type GameState } from '@/engine';
 import { decideAction } from '../decideAction';
 
 const PLAYERS = [
@@ -371,6 +371,10 @@ describe('decideAction — full-game integration against the real engine', () =>
    */
   it('roads a Food tile before an otherwise-equal non-food tile once there is an army to feed', () => {
     const state = structuredClone(createGame('road-food-priority', PLAYERS, 'road-food-priority-seed', 'hotseat'));
+    // [DEFAULT — roads, UI feedback change] Roads are now Build-phase only (see
+    // reducers.ts's applyBuildRoad) — a freshly created game starts at Phase.Production, so this
+    // has to be forced into Phase.Build directly for decideAction to even consider BuildRoad.
+    state.currentPhase = Phase.Build;
     const p1 = state.players.find((p) => p.id === 'p1')!;
     p1.resources.Wood = 5; // enough to actually afford the segment
 

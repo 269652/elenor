@@ -14,9 +14,20 @@ export interface HotseatPlayerSetup extends SetupPlayerInput {
 const PALETTE = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316'];
 const DEFAULT_NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank'];
 
-export function HotseatSetup({ onStart }: { onStart: (players: HotseatPlayerSetup[]) => void }) {
+export interface GameSettings {
+  /** Turn timer in seconds; 0 means no timer. */
+  turnTimerSeconds: number;
+}
+
+export interface HotseatStartPayload {
+  players: HotseatPlayerSetup[];
+  settings: GameSettings;
+}
+
+export function HotseatSetup({ onStart }: { onStart: (payload: HotseatStartPayload) => void }) {
   const [names, setNames] = useState<string[]>([DEFAULT_NAMES[0], DEFAULT_NAMES[1]]);
   const [isAI, setIsAI] = useState<boolean[]>([false, false]);
+  const [turnTimerSeconds, setTurnTimerSeconds] = useState<number>(0);
 
   function updateName(i: number, value: string) {
     setNames((prev) => prev.map((n, idx) => (idx === i ? value : n)));
@@ -45,7 +56,7 @@ export function HotseatSetup({ onStart }: { onStart: (players: HotseatPlayerSetu
       color: PALETTE[i % PALETTE.length],
       isAI: isAI[i],
     }));
-    onStart(players);
+    onStart({ players, settings: { turnTimerSeconds } });
   }
 
   const aiCount = isAI.filter(Boolean).length;
@@ -87,7 +98,7 @@ export function HotseatSetup({ onStart }: { onStart: (players: HotseatPlayerSetu
                 title={isAI[i] ? 'AI-controlled — click to make human' : 'Human-controlled — click to make AI'}
                 className={
                   isAI[i]
-                    ? 'shrink-0 rounded-sm border border-hx-arcane/60 bg-hx-arcane/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-hx-arcane transition hover:bg-hx-arcane/30'
+                    ? 'shrink-0 rounded-sm border border-hx-arcane bg-hx-arcane px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-hx-ink transition hover:brightness-110'
                     : 'shrink-0 rounded-sm border border-hx-border bg-hx-panel px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-hx-ink-faint transition hover:border-hx-border-strong hover:text-hx-ink'
                 }
               >
@@ -114,6 +125,28 @@ export function HotseatSetup({ onStart }: { onStart: (players: HotseatPlayerSetu
       )}
 
       <div className="flex flex-col gap-2 border-t border-hx-border pt-3">
+        <div className="flex flex-col gap-1">
+          <label htmlFor="turn-timer" className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">
+            ⏱️ Turn Timer (seconds)
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="turn-timer"
+              type="number"
+              min={0}
+              max={600}
+              step={5}
+              value={turnTimerSeconds}
+              onChange={(e) => setTurnTimerSeconds(Math.max(0, Number(e.target.value)))}
+              className={INPUT}
+            />
+            <span className="flex items-center text-xs text-hx-ink-faint">
+              {turnTimerSeconds === 0 ? 'No timer' : `${turnTimerSeconds}s per turn`}
+            </span>
+          </div>
+          <p className="text-[11px] text-hx-ink-faint">Set to 0 for no time limit, or configure up to 10 minutes per turn.</p>
+        </div>
+
         <button type="button" onClick={start} className={`${BTN_PRIMARY} w-full font-display tracking-wide`}>
           Start Game ▶
         </button>
