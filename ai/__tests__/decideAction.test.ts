@@ -403,6 +403,24 @@ describe('decideAction — full-game integration against the real engine', () =>
     }
   });
 
+  it('does not propose an impossible Door-monster fight when pending encounter coord is stale', () => {
+    const state = structuredClone(createGame('ai-stale-door-pending', PLAYERS, 'ai-stale-door-pending-seed', 'hotseat'));
+    state.currentPhase = Phase.Fight;
+    const player = state.players.find((p) => p.id === state.currentPlayerId)!;
+
+    // Simulate a stale pending encounter: same hero id, but no longer at that tile.
+    const staleCoord = hexNeighbors(player.hero.position)[0];
+    state.pendingDoorMonster = {
+      heroId: player.hero.id,
+      coord: staleCoord,
+      monsterCardId: 'monster-gallows-knight-0',
+    };
+
+    const action = decideAction(state, player.id);
+    expect(action.type, `expected to skip stale pending fight, got ${JSON.stringify(action)}`).toBe('AdvancePhase');
+    expect(() => applyAction(state, action)).not.toThrow();
+  });
+
   it('throws IllegalActionError (not some other error) if ever asked to act for a player not on turn', () => {
     const state = createGame('ai-wrong-turn', PLAYERS, 'wrong-turn-seed', 'hotseat');
     const notCurrent = state.players.find((p) => p.id !== state.currentPlayerId)!.id;

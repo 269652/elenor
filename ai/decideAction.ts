@@ -772,6 +772,10 @@ function decideFight(state: GameState, player: Player): Action {
   // with "A Door monster is still standing in your way."
   const pending = state.pendingDoorMonster;
   if (pending && pending.heroId === hero.id) {
+    // Stale pending encounters can exist if the hero was displaced after the draw (e.g. knockout
+    // from another fight). A Door monster is only fightable on the draw tile, so don't emit an
+    // impossible HeroVsMonster action from a different coordinate.
+    if (!samePos(hero.position, pending.coord)) return advance(player.id);
     return { type: 'Fight', actorId: player.id, combatType: 'HeroVsMonster', coord: pending.coord, monsterCardId: pending.monsterCardId };
   }
 

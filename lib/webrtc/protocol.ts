@@ -29,6 +29,22 @@ export interface LobbyPlayerInfo {
   isHost: boolean;
 }
 
+/** [DEFAULT — direct request: "a little chat in a second tab of sidebar"] Always relayed THROUGH
+ *  the host (a joiner sends `chatSend`, never a raw ChatMessage) so id/sentAt come from one place
+ *  and every peer — including the sender — ends up with the exact same message, same as how
+ *  `action`/`stateSync` already work. Not part of GameState: chat has no bearing on game rules or
+ *  determinism, and keeping it out of the engine's own state means it never needs to round-trip
+ *  through applyAction, get saved into hotseat/P2P persistence, or worry an unrelated engine
+ *  change could ever touch it. */
+export interface ChatMessage {
+  id: string;
+  playerId: PlayerId;
+  name: string;
+  color: string;
+  text: string;
+  sentAt: number;
+}
+
 /** What a joiner hands the host as PeerJS connection metadata (peer.connect's `metadata` option,
  *  visible to the host synchronously in its 'connection' event — no round trip needed). Carries
  *  a STABLE playerId (minted once client-side, persisted across reconnects — see
@@ -45,22 +61,49 @@ export interface JoinerMetadata {
 export type P2PMessage =
   /** Host -> every joiner, whenever the waiting-room roster changes (join/leave). */
   | { kind: 'lobbyUpdate'; players: LobbyPlayerInfo[] }
-  /** Host -> every joiner, once: the lobby is over, here is the real GameState to play. */
-  | { kind: 'gameStarted'; state: GameState }
+  /** Host -> every joiner, once: the lobby is over, here is the real GameState to play.
+   *  aiControlledPlayerIds travels alongside state for the same reason stateSync's copy does —
+   *  see that field's own comment below. */
+  | { kind: 'gameStarted'; state: GameState; aiControlledPlayerIds: PlayerId[] }
   /** Joiner -> host: "I'd like to apply this action." Host validates via applyAction and either
    *  broadcasts the resulting stateSync to everyone, or replies reject to just this sender. */
   | { kind: 'action'; action: Action }
   /** Host -> every joiner (including, harmlessly, an echo back to whoever sent the action that
    *  caused it): the new authoritative state. Full-state rather than action-only on purpose —
    *  self-healing against any local drift instead of silently compounding it, at a bandwidth
-   *  cost this transport (no server bill, no rate limits) can afford. */
-  | { kind: 'stateSync'; state: GameState }
+   *  cost this transport (no server bill, no rate limits) can afford.
+   *  [DEFAULT — direct request: "toggle Human/AI mid game"] aiControlledPlayerIds rides along on
+   *  EVERY stateSync (not a separately-synchronized message) so it can never drift out of step
+   *  with the state it describes — a reconnecting/late joiner gets both atomically from whichever
+   *  stateSync they happen to receive first, with nothing extra to request or race against. */
+  | { kind: 'stateSync'; state: GameState; aiControlledPlayerIds: PlayerId[] }
   /** Host -> the one joiner whose action didn't validate (state moved under them, stale UI,
    *  etc.) — lets that peer's optimistic local apply roll back with a real reason shown. */
   | { kind: 'reject'; reason: string }
   /** Joiner -> host, sent right after reconnecting (see peer-room.ts's reconnect handling) — "I
    *  might have missed messages while disconnected, send me the current authoritative state." */
-  | { kind: 'requestSync' };
+  | { kind: 'requestSync' }
+  /** Host -> the one joiner being removed, immediately before the host closes that connection —
+   *  [DEFAULT — direct request: "kick a player"] lets that peer show a real reason ("removed by
+   *  the host") instead of the generic reconnect-failed error a plain disconnect would produce. */
+  | { kind: 'kicked'; reason: string }
+  /** Host -> every joiner (target included) — [DEFAULT — direct request: "transfer hosting to
+   *  another player"] announces a live handoff is starting. The target peer reacts by seeding
+   *  itself a host session and taking over as the new room's Peer (same room code — see
+   *  hooks/use-p2p-host.ts's transferHostTo and hooks/use-p2p-join.ts's onHostMessage); the old
+   *  host reacts to ITS OWN call to transferHostTo, not to this broadcast (it already knows).
+   *  Every other joiner needs no special handling at all: their existing onHostDisconnected retry
+   *  loop (hooks/use-p2p-join.ts) already reconnects to the same room code, and connectAsHost's
+   *  existing SAME_CODE_RETRY_ATTEMPTS (lib/webrtc/peer-room.ts) already covers the brief window
+   *  where the new host's connectAsHost call and the old host's connection teardown race. */
+  | { kind: 'hostTransferring'; toPlayerId: PlayerId }
+  /** Joiner -> host: "relay this chat message." Never a raw ChatMessage — see that type's own
+   *  comment for why id/sentAt are always host-assigned. */
+  | { kind: 'chatSend'; text: string }
+  /** Host -> every joiner (sender included, so their own message renders from the same code path
+   *  as everyone else's rather than an optimistic local echo that could end up styled/ordered
+   *  differently). */
+  | { kind: 'chatMessage'; message: ChatMessage };
 
 /** Human-typeable room code: Crockford-ish alphabet (no 0/O/1/I/L) so it reads back unambiguously
  *  read aloud or over chat. This is a TRANSPORT/session identifier, not game state — unrelated to

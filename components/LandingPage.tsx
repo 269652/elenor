@@ -26,6 +26,11 @@ export function LandingPage({ supabaseConfigured }: { supabaseConfigured: boolea
   // immediately matters here specifically.
   const [tab, setTab] = useState<Tab | null>(null);
   useLayoutEffect(() => {
+    // This IS the "synchronize with an external system" case the lint rule's own guidance
+    // carves out — localStorage/sessionStorage, read exactly once, right after mount, is the
+    // external system; there's no other way to get this value into state without either this
+    // effect or the pre-existing hydration mismatch it replaces.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (loadHotseatSession()) setTab('local');
     else if (loadHostSession() || loadJoinSession()) setTab('p2p');
     else setTab('menu');

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import clsx from 'clsx';
 import { SCREEN_ART } from '@/components/screenArt';
@@ -35,6 +35,9 @@ import { BuildMenu, roadEndpointOptions } from '@/components/build/BuildMenu';
 import { TradePanel } from '@/components/hud/TradePanel';
 import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 import { useAiTurn } from '@/hooks/use-ai-turn';
+import { AdminMenu } from '@/components/p2p/AdminMenu';
+import { ChatPanel } from '@/components/p2p/ChatPanel';
+import type { P2PRoomContext } from '@/components/p2p/types';
 
 const NO_AI_PLAYERS: ReadonlySet<PlayerId> = new Set();
 
@@ -87,6 +90,13 @@ interface GameBoardAppProps {
    *  just navigating away, depending on which caller wires it up. Optional: online mode (and any
    *  future mode) that doesn't have an "exit" concept yet simply omits it and no button renders. */
   onExit?: () => void;
+  /** [DEFAULT — direct request: "a menu when I press ESC where the admin can manage the players
+   *  .. a little chat in a second tab of sidebar"] Present only for P2P play — hotseat has no
+   *  other players to manage or chat with, and online mode doesn't wire this up (yet). Its mere
+   *  presence is what gates the Escape listener, the admin menu, and the chat sidebar tab below —
+   *  omitting it (the hotseat/online default) reproduces this component's exact pre-existing
+   *  behavior with zero code-path changes for either of those modes. */
+  p2p?: P2PRoomContext;
 }
 
 /** [DEFAULT — territory rework] What a MoveSoldiers march onto a given neighbour would actually
@@ -209,8 +219,22 @@ function IosSwitch({ checked, onChange, label }: { checked: boolean; onChange: (
   );
 }
 
-export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = NO_AI_PLAYERS, onExit }: GameBoardAppProps) {
+export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = NO_AI_PLAYERS, onExit, p2p }: GameBoardAppProps) {
   const [selectedCoord, setSelectedCoord] = useState<HexCoord | null>(null);
+  // [DEFAULT — direct request: "a menu when I press ESC .. a little chat in a second tab of
+  // sidebar"] Both P2P-only — the listener and the tab strip below are simply never rendered/
+  // attached without a p2p context (hotseat/online), so Escape does nothing there, same as today.
+  const [showAdminMenu, setShowAdminMenu] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<'game' | 'chat'>('game');
+  useEffect(() => {
+    if (!p2p) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      setShowAdminMenu((v) => !v);
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [p2p]);
   const [pendingPath, setPendingPath] = useState<HexCoord[]>([]);
   /** Armed march: the tile whose garrison is about to walk somewhere, and how many of them. */
   const [marchFrom, setMarchFrom] = useState<HexCoord | null>(null);
@@ -502,7 +526,43 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 overflow-y-auto">
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        {/* [DEFAULT — direct request: "a little chat in a second tab of sidebar .. badge with
+            unread messages"] P2P-only — hotseat/online render nothing here at all (p2p is
+            undefined), reproducing the sidebar's exact pre-existing layout with zero change. */}
+        {p2p && (
+          <div className="flex shrink-0 gap-1 border-b border-hx-border">
+            <button
+              type="button"
+              onClick={() => setSidebarTab('game')}
+              className={clsx(
+                'flex-1 rounded-t-sm px-2 py-1.5 text-xs font-semibold transition',
+                sidebarTab === 'game' ? 'border-b-2 border-hx-gold text-hx-gold' : 'text-hx-ink-faint hover:text-hx-ink'
+              )}
+            >
+              🗺️ Game
+            </button>
+            <button
+              type="button"
+              onClick={() => setSidebarTab('chat')}
+              className={clsx(
+                'relative flex-1 rounded-t-sm px-2 py-1.5 text-xs font-semibold transition',
+                sidebarTab === 'chat' ? 'border-b-2 border-hx-gold text-hx-gold' : 'text-hx-ink-faint hover:text-hx-ink'
+              )}
+            >
+              💬 Chat
+              {p2p.unreadChatCount > 0 && (
+                <span className="absolute right-1 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-hx-blood px-1 font-mono text-[9px] text-hx-ink">
+                  {p2p.unreadChatCount > 99 ? '99+' : p2p.unreadChatCount}
+                </span>
+              )}
+            </button>
+          </div>
+        )}
+        {p2p && sidebarTab === 'chat' ? (
+          <ChatPanel ctx={p2p} />
+        ) : (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
         <div className={PANEL}>
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
@@ -757,7 +817,10 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
 
         <TradePanel player={player} dispatch={dispatch} canAct={canAct} />
       </div>
+        )}
       </div>
+      </div>
+      {p2p && showAdminMenu && <AdminMenu ctx={p2p} onClose={() => setShowAdminMenu(false)} />}
     </>
   );
 }

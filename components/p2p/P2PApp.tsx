@@ -9,13 +9,14 @@
  * calls its connecting hook) once the player has actually committed to hosting/joining.
  */
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { GameBoardApp } from '@/components/GameBoardApp';
 import { BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 import { useP2PHost, type P2PHostPhase } from '@/hooks/use-p2p-host';
 import { useP2PJoin, type P2PJoinPhase } from '@/hooks/use-p2p-join';
 import { isPlausibleRoomCode, normalizeRoomCode, type LobbyPlayerInfo } from '@/lib/webrtc/protocol';
 import { clearHostSession, clearJoinSession, loadHostSession, loadJoinSession, saveJoinSession } from '@/lib/webrtc/persistence';
+import type { P2PRoomContext } from './types';
 
 const PALETTE = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316'];
 const DEFAULT_NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank'];
@@ -140,16 +141,56 @@ function HostLobby({ hostState, onLeave }: { hostState: Extract<P2PHostPhase, { 
   );
 }
 
-function P2PHostRoom({ name, color, onBack, onLeave }: { name: string; color: string; onBack: () => void; onLeave: () => void }) {
+function P2PHostRoom({
+  name,
+  color,
+  onBack,
+  onLeave,
+  onTransferredAway,
+}: {
+  name: string;
+  color: string;
+  onBack: () => void;
+  onLeave: () => void;
+  /** [DEFAULT — direct request: "transfer hosting to another player"] Room code is only known
+   *  once useP2PHost resolves it (below) — not available at the moment this callback is WIRED
+   *  UP (that has to happen before the hook call, as its own param) — so it's threaded through
+   *  as an argument here instead of closed over, and the caller (P2PApp) uses it to seed
+   *  `committedRoomCode` before switching `screen` to 'join-room'. */
+  onTransferredAway: (roomCode: string) => void;
+}) {
   const hostInfo = useMemo(() => ({ name, color }), [name, color]);
-  const result = useP2PHost(hostInfo);
+  const roomCodeRef = useRef('');
+  const result = useP2PHost(hostInfo, {
+    onTransferredAway: () => onTransferredAway(roomCodeRef.current),
+  });
+  // Written from an effect, not during render — this project's react-hooks/refs rule forbids
+  // mutating a ref mid-render (see use-p2p-host.ts's identical comment on the READ side of this
+  // same rule). Still up to date by the time onTransferredAway can possibly fire: that only ever
+  // happens from a later user click, well after this effect has had a chance to run.
+  useEffect(() => {
+    if (result.phase === 'lobby' || result.phase === 'active') roomCodeRef.current = result.roomCode;
+  });
 
   if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label="Opening a room…" /></CenteredScreen>;
   if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
   if (result.phase === 'lobby') return <CenteredScreen><HostLobby hostState={result} onLeave={onLeave} /></CenteredScreen>;
   // Unwrapped, same as components/HotseatApp.tsx's LocalGame — GameBoardApp's own grid fills the
   // page's full block width/height; a centering wrapper here would shrink it to content size.
-  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} />;
+  const ctx: P2PRoomContext = {
+    isHost: true,
+    myPlayerId: result.myPlayerId,
+    players: result.players,
+    aiControlledPlayerIds: result.aiControlledPlayerIds,
+    onKick: result.kickPlayer,
+    onToggleAi: result.setSeatAiControl,
+    onTransferHost: result.transferHostTo,
+    chatMessages: result.chatMessages,
+    unreadChatCount: result.unreadChatCount,
+    sendChat: result.sendChat,
+    markChatRead: result.markChatRead,
+  };
+  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} p2p={ctx} />;
 }
 
 // ── Join ─────────────────────────────────────────────────────────────────────────────────────
@@ -160,15 +201,20 @@ function P2PJoinRoom({
   color,
   onBack,
   onLeave,
+  onBecameHost,
 }: {
   roomCode: string;
   name: string;
   color: string;
   onBack: () => void;
   onLeave: () => void;
+  /** [DEFAULT — direct request: "transfer hosting to another player"] See
+   *  hooks/use-p2p-join.ts's UseP2PJoinCallbacks — the hook has already seeded a host session to
+   *  resume into by the time this fires, so all P2PApp needs to do is switch `screen`. */
+  onBecameHost: () => void;
 }) {
   const myInfo = useMemo(() => ({ name, color }), [name, color]);
-  const result: P2PJoinPhase = useP2PJoin(roomCode, myInfo);
+  const result: P2PJoinPhase = useP2PJoin(roomCode, myInfo, { onBecameHost });
 
   if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label={`Connecting to room ${roomCode}…`} /></CenteredScreen>;
   if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
@@ -189,7 +235,17 @@ function P2PJoinRoom({
     );
   }
   // Unwrapped — see P2PHostRoom's identical comment above.
-  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} />;
+  const ctx: P2PRoomContext = {
+    isHost: false,
+    myPlayerId: result.myPlayerId,
+    players: result.players,
+    aiControlledPlayerIds: result.aiControlledPlayerIds,
+    chatMessages: result.chatMessages,
+    unreadChatCount: result.unreadChatCount,
+    sendChat: result.sendChat,
+    markChatRead: result.markChatRead,
+  };
+  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} p2p={ctx} />;
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────────────────────────
@@ -321,7 +377,18 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
     // onBack only ever fires from the error screen — reusing leaveHostRoom there too so a
     // genuinely dead room (couldn't reopen its code, fatal signaling error) doesn't leave a
     // stale session behind that the NEXT reload would just try to resume into again.
-    return <P2PHostRoom name={name.trim() || randomDefaultName()} color={color} onBack={leaveHostRoom} onLeave={leaveHostRoom} />;
+    return (
+      <P2PHostRoom
+        name={name.trim() || randomDefaultName()}
+        color={color}
+        onBack={leaveHostRoom}
+        onLeave={leaveHostRoom}
+        onTransferredAway={(code) => {
+          setCommittedRoomCode(code);
+          setScreen('join-room');
+        }}
+      />
+    );
   }
 
   if (screen === 'join-setup') {
@@ -377,6 +444,7 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
       color={color}
       onBack={leaveJoinRoom}
       onLeave={leaveJoinRoom}
+      onBecameHost={() => setScreen('host-room')}
     />
   );
 }

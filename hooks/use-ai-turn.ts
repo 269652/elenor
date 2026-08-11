@@ -28,7 +28,11 @@ const ACTION_DELAY_MS = 550;
  *  than hammering the CPU or the RNG cursor indefinitely. */
 const MAX_ACTIONS_PER_TURN = 60;
 
-export function useAiTurn(state: GameState, aiPlayerIds: ReadonlySet<PlayerId>, dispatch: (action: Action) => boolean | Promise<boolean>) {
+// [DEFAULT — direct request: "toggle Human/AI mid game"] `state` widened to accept null so
+// hooks/use-p2p-host.ts (which has no GameState at all before the lobby's Start Game) can call
+// this hook unconditionally, same as every other hook — it's just never anyone's "turn" in a
+// null state, so everything below short-circuits harmlessly until a real game exists.
+export function useAiTurn(state: GameState | null, aiPlayerIds: ReadonlySet<PlayerId>, dispatch: (action: Action) => boolean | Promise<boolean>) {
   const actionsThisTurnRef = useRef(0);
   const lastPlayerRef = useRef<PlayerId | null>(null);
 
@@ -57,6 +61,7 @@ export function useAiTurn(state: GameState, aiPlayerIds: ReadonlySet<PlayerId>, 
   const aiPlayerIdsKey = Array.from(aiPlayerIds).sort().join(',');
 
   useEffect(() => {
+    if (!state) return;
     if (state.winnerId) return;
     if (!aiPlayerIds.has(state.currentPlayerId)) return;
 
@@ -74,8 +79,9 @@ export function useAiTurn(state: GameState, aiPlayerIds: ReadonlySet<PlayerId>, 
 
       const current = stateRef.current;
       // Re-check against the LATEST state, not the state this effect closed over — the turn or
-      // the game may have already ended by the time a delayed tick fires.
-      if (current.winnerId || !aiPlayerIds.has(current.currentPlayerId)) return;
+      // the game may have already ended (or, for the P2P host, never started) by the time a
+      // delayed tick fires.
+      if (!current || current.winnerId || !aiPlayerIds.has(current.currentPlayerId)) return;
 
       actionsThisTurnRef.current += 1;
       let applied = false;
@@ -114,5 +120,5 @@ export function useAiTurn(state: GameState, aiPlayerIds: ReadonlySet<PlayerId>, 
     };
     // aiPlayerIdsKey stands in for aiPlayerIds by design; see its doc comment above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.currentPlayerId, state.winnerId, aiPlayerIdsKey]);
+  }, [state?.currentPlayerId, state?.winnerId, aiPlayerIdsKey]);
 }

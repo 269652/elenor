@@ -1686,7 +1686,7 @@ function requireNoPendingDoorMonster(state: GameState, actorId: PlayerId) {
   const pending = state.pendingDoorMonster;
   if (!pending) return;
   const player = findPlayer(state, actorId);
-  const belongsToActor = player.hero.id === pending.heroId;
+  const belongsToActor = player.hero.id === pending.heroId && sameCoord(player.hero.position, pending.coord);
   if (belongsToActor) {
     throw new IllegalActionError('A Door monster is still standing in your way — fight it (Phase 4) before ending your turn');
   }

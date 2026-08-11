@@ -38,6 +38,14 @@ export interface PeerRoomHandle {
   /** Joiner use: push a message to the host. No-ops (silently) if the host connection isn't open
    *  yet — callers gate on onOpen firing first. */
   sendToHost(message: P2PMessage): void;
+  /** [DEFAULT — direct request: "kick a player"] Host use: closes ONE joiner's connection without
+   *  tearing down the room for anyone else — unlike close() below, which tears down everything.
+   *  Callers should `send(toPeerId, {kind:'kicked', ...})` first and give it a moment to actually
+   *  reach the wire (see hooks/use-p2p-host.ts's kickPlayer) before calling this, same reasoning
+   *  as hostTransferring's own send-then-close ordering. No-op for a joiner's own handle (a
+   *  joiner has no other peers to disconnect) — matches send/broadcast's existing no-op symmetry
+   *  on that side. */
+  disconnectPeer(peerId: string): void;
   /** Tears down every connection and the underlying Peer. Always call on unmount. */
   close(): void;
 }
@@ -155,6 +163,12 @@ export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers
       // A host has no "host" to send to — no-op, matches the interface for symmetry with the
       // joiner handle so callers don't need to type-branch.
     },
+    disconnectPeer(peerId) {
+      // No explicit connections.delete here — conn.close() fires the 'close' listener registered
+      // above (peer.on('connection', ...)'s conn.on('close', ...)), which already does that and
+      // notifies handlers.onJoinerDisconnected, exactly like a real network drop would.
+      connections.get(peerId)?.close();
+    },
     close() {
       for (const conn of connections.values()) conn.close();
       connections.clear();
@@ -227,6 +241,10 @@ export async function connectAsJoiner(roomCode: string, myInfo: JoinerMetadata, 
     },
     sendToHost(message) {
       if (conn.open) conn.send(message);
+    },
+    disconnectPeer() {
+      // A joiner has no other peers to disconnect (star topology) — no-op, same symmetry as
+      // send/broadcast above.
     },
     close() {
       conn.close();

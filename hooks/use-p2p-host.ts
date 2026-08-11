@@ -24,15 +24,39 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { nanoid } from 'nanoid';
 import { applyAction, createGame, IllegalActionError, type Action, type GameState, type PlayerId } from '@/engine';
+import { useAiTurn } from '@/hooks/use-ai-turn';
 import { connectAsHost, type PeerRoomHandle } from '@/lib/webrtc/peer-room';
-import type { LobbyPlayerInfo, P2PMessage } from '@/lib/webrtc/protocol';
+import type { ChatMessage, LobbyPlayerInfo } from '@/lib/webrtc/protocol';
 import { generateRoomCode } from '@/lib/webrtc/protocol';
-import { loadHostSession, saveHostSession } from '@/lib/webrtc/persistence';
+import { clearHostSession, loadHostSession, saveHostSession, saveJoinSession } from '@/lib/webrtc/persistence';
 
 export type P2PHostPhase =
   | { phase: 'connecting' }
   | { phase: 'lobby'; roomCode: string; players: LobbyPlayerInfo[]; canStart: boolean; startGame: () => void }
-  | { phase: 'active'; roomCode: string; state: GameState; dispatch: (action: Action) => boolean; error: string | null; isMyTurn: boolean; myPlayerId: PlayerId }
+  | {
+      phase: 'active';
+      roomCode: string;
+      state: GameState;
+      dispatch: (action: Action) => boolean;
+      error: string | null;
+      isMyTurn: boolean;
+      myPlayerId: PlayerId;
+      /** [DEFAULT — direct request: "toggle Human/AI mid game .. transfer hosting .. kick a
+       *  player .. a little chat"] Everything components/p2p/AdminMenu.tsx and ChatPanel.tsx need
+       *  — bundled here rather than as separate hook calls because they're all facets of the same
+       *  "I am the authoritative host" role this phase represents; a joiner's equivalent phase in
+       *  hooks/use-p2p-join.ts exposes the read-only half of the same shape (no kick/toggle/
+       *  transfer — those are host-only actions, never sent by a joiner). */
+      players: LobbyPlayerInfo[];
+      aiControlledPlayerIds: ReadonlySet<PlayerId>;
+      setSeatAiControl: (playerId: PlayerId, isAI: boolean) => void;
+      kickPlayer: (playerId: PlayerId) => void;
+      transferHostTo: (playerId: PlayerId) => void;
+      chatMessages: ChatMessage[];
+      unreadChatCount: number;
+      sendChat: (text: string) => void;
+      markChatRead: () => void;
+    }
   | { phase: 'error'; message: string };
 
 interface HostInfo {
@@ -40,10 +64,19 @@ interface HostInfo {
   color: string;
 }
 
+export interface UseP2PHostCallbacks {
+  /** [DEFAULT — direct request: "transfer hosting to another player"] Fires once this device has
+   *  finished handing off host duties (broadcast sent, own session re-seeded as a joiner, own
+   *  Peer closed) — the caller (components/p2p/P2PApp.tsx) reacts by switching its `screen` state
+   *  from 'host-room' to 'join-room', which unmounts this hook and mounts hooks/use-p2p-join.ts
+   *  in its place. See transferHostTo below for the full sequence. */
+  onTransferredAway?: () => void;
+}
+
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
 
-export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
+export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = {}): P2PHostPhase {
   // [DEFAULT — direct request: "if the host reloads the tab it should be restored after reload
   // and let the clients reconnect to resume session"] Read once, at first mount — the whole
   // point of a lazy initializer here is that a persisted session (if any) governs THIS mount's
@@ -80,11 +113,45 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
   // for the same reason gameStateRef/handleRef are refs: it needs to be readable from callbacks
   // that don't re-run when the effect does.
   const persistRef = useRef<() => void>(() => {});
+  // syncLobbyState (defined inside the effect below, since it closes over setLobbyPlayers) needs
+  // to also be callable from kickPlayer, which — like dispatch/startGame — is a useCallback
+  // declared outside the effect. Same ref-indirection pattern as persistRef.
+  const syncLobbyStateRef = useRef<() => LobbyPlayerInfo[]>(() => []);
+  // [DEFAULT — direct request: "kick a player"] A kicked player who simply redials the same room
+  // code (their own existing reconnect loop, hooks/use-p2p-join.ts, has no idea they were kicked)
+  // would otherwise just walk right back in — checked in onJoinerConnected below, before they're
+  // ever added back to the roster.
+  const bannedPlayerIds = useRef(new Set<PlayerId>());
+  // [DEFAULT — direct request: "toggle Human/AI mid game"] Mirrors GameState.currentPlayerId
+  // against this set (via useAiTurn below) to decide whether the HOST itself should be the one
+  // driving a given seat's turn — same ai/decideAction.ts hotseat already uses, just invoked from
+  // the authoritative side of a P2P game instead of client-side pass-and-play. Not persisted
+  // across a host reload (resets to "everyone human-controlled") — a disclosed, minor gap, not a
+  // regression of anything that worked before this feature existed.
+  const aiControlledRef = useRef(new Set<PlayerId>());
+  // [DEFAULT — direct request: "transfer hosting to another player"] This device's OWN effective
+  // name/color, captured once the connect effect resolves them — transferHostTo needs these to
+  // seed its own post-handoff join session, but effectiveName/effectiveColor are otherwise local
+  // consts scoped to the effect below.
+  const effectiveNameRef = useRef(hostInfo.name);
+  const effectiveColorRef = useRef(hostInfo.color);
+  // [DEFAULT — direct request: "a little chat in a second tab of sidebar"] Set inside the effect
+  // once playersRef/handleRef are live — called from BOTH onJoinerMessage's 'chatSend' branch
+  // (someone else's message) and sendChat below (this device's own), so both paths stamp
+  // id/sentAt/name/color and broadcast identically. Same ref-indirection reason as persistRef.
+  const relayChatRef = useRef<(text: string, fromPlayerId: PlayerId) => void>(() => {});
+  const callbacksRef = useRef(callbacks);
+  useEffect(() => {
+    callbacksRef.current = callbacks;
+  });
 
   const [phase, setPhase] = useState<'connecting' | 'lobby' | 'active' | 'error'>('connecting');
   const [roomCode, setRoomCode] = useState('');
   const [lobbyPlayers, setLobbyPlayers] = useState<LobbyPlayerInfo[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(resumed?.gameState ?? null);
+  const [aiControlledPlayerIds, setAiControlledPlayerIds] = useState<ReadonlySet<PlayerId>>(new Set());
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
 
@@ -99,6 +166,7 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
       setLobbyPlayers(list);
       return list;
     }
+    syncLobbyStateRef.current = syncLobbyState;
 
     (async () => {
       try {
@@ -108,20 +176,38 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
         handle = await connectAsHost(resumed?.roomCode ?? generateRoomCode(), {
           onJoinerConnected(peerId, meta) {
             if (cancelled) return;
+            // [DEFAULT — direct request: "kick a player"] Checked before anything else touches
+            // the roster — a kicked player's own reconnect loop (hooks/use-p2p-join.ts) has no
+            // idea they were kicked and will just redial the same room code; this is what stops
+            // that from silently walking them back in.
+            if (bannedPlayerIds.current.has(meta.playerId)) {
+              handleRef.current?.send(peerId, { kind: 'kicked', reason: 'Removed by the host' });
+              setTimeout(() => handleRef.current?.disconnectPeer(peerId), 250);
+              return;
+            }
             peerIdToPlayerId.current.set(peerId, meta.playerId);
+
+            // [DEFAULT — direct request: "the admin can manage the players"] Kept current
+            // regardless of phase now (previously only pre-game) — components/p2p/AdminMenu.tsx
+            // needs an accurate live roster mid-game too, for the kick/AI-toggle player list.
+            const alreadyKnown = playersRef.current.has(meta.playerId);
+            playersRef.current.set(meta.playerId, { playerId: meta.playerId, name: meta.name, color: meta.color, isHost: false });
+            const list = syncLobbyState();
 
             if (gameStateRef.current) {
               // Game already started: this is either a genuine reconnect (welcome back — resend
               // the authoritative state) or, if that stable id was never in this game at all,
               // a straggler who dialed in after the lobby closed — same response either way,
               // there's no lobby to add them to anymore.
-              handleRef.current?.send(peerId, { kind: 'stateSync', state: gameStateRef.current });
+              handleRef.current?.send(peerId, {
+                kind: 'stateSync',
+                state: gameStateRef.current,
+                aiControlledPlayerIds: [...aiControlledRef.current],
+              });
+              if (!alreadyKnown) handleRef.current?.broadcast({ kind: 'lobbyUpdate', players: list });
               return;
             }
 
-            const alreadyKnown = playersRef.current.has(meta.playerId);
-            playersRef.current.set(meta.playerId, { playerId: meta.playerId, name: meta.name, color: meta.color, isHost: false });
-            const list = syncLobbyState();
             if (alreadyKnown) {
               // A second live connection for a stable id already on the roster — just bring
               // THIS connection's own view up to date, nothing changed for anyone else.
@@ -136,7 +222,17 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
             if (!stablePlayerId) return; // shouldn't happen — onJoinerConnected always runs first
 
             if (message.kind === 'requestSync') {
-              if (gameStateRef.current) handleRef.current?.send(peerId, { kind: 'stateSync', state: gameStateRef.current });
+              if (gameStateRef.current) {
+                handleRef.current?.send(peerId, {
+                  kind: 'stateSync',
+                  state: gameStateRef.current,
+                  aiControlledPlayerIds: [...aiControlledRef.current],
+                });
+              }
+              return;
+            }
+            if (message.kind === 'chatSend') {
+              relayChatRef.current(message.text, stablePlayerId);
               return;
             }
             if (message.kind !== 'action') return;
@@ -149,12 +245,20 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
               handleRef.current?.send(peerId, { kind: 'reject', reason: 'actorId does not match your connection' });
               return;
             }
+            // [DEFAULT — direct request: "toggle Human/AI mid game"] A seat under AI control is
+            // the HOST's own decideAction loop (useAiTurn below) to move, not whichever human used
+            // to sit there — their own dispatch attempts (stale UI they haven't reloaded, or just
+            // a race with the toggle) are rejected the same way any other illegal action would be.
+            if (aiControlledRef.current.has(stablePlayerId)) {
+              handleRef.current?.send(peerId, { kind: 'reject', reason: 'This seat is currently controlled by AI' });
+              return;
+            }
             try {
               const next = applyAction(current, message.action);
               gameStateRef.current = next;
               setGameState(next);
               persistRef.current();
-              handleRef.current?.broadcast({ kind: 'stateSync', state: next });
+              handleRef.current?.broadcast({ kind: 'stateSync', state: next, aiControlledPlayerIds: [...aiControlledRef.current] });
             } catch (err) {
               if (err instanceof IllegalActionError) {
                 handleRef.current?.send(peerId, { kind: 'reject', reason: err.message });
@@ -195,6 +299,8 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
         // belongs to. The persisted session is the source of truth for "who am I" once resuming.
         const effectiveName = resumed?.name ?? hostInfo.name;
         const effectiveColor = resumed?.color ?? hostInfo.color;
+        effectiveNameRef.current = effectiveName;
+        effectiveColorRef.current = effectiveColor;
         playersRef.current.set(myPlayerId, { playerId: myPlayerId, name: effectiveName, color: effectiveColor, isHost: true });
 
         persistRef.current = () => {
@@ -207,6 +313,26 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
           });
         };
         persistRef.current();
+
+        // [DEFAULT — direct request: "a little chat"] text/500-char cap is defensive against a
+        // malformed/hostile peer, not a real UX limit — see ChatMessage's own comment for why
+        // chat never touches GameState or applyAction.
+        relayChatRef.current = (text, fromPlayerId) => {
+          const trimmed = text.trim().slice(0, 500);
+          if (!trimmed) return;
+          const sender = playersRef.current.get(fromPlayerId);
+          const msg = {
+            id: nanoid(8),
+            playerId: fromPlayerId,
+            name: sender?.name ?? 'Player',
+            color: sender?.color ?? '#888888',
+            text: trimmed,
+            sentAt: Date.now(),
+          };
+          setChatMessages((prev) => [...prev, msg]);
+          if (fromPlayerId !== myPlayerId) setUnreadChatCount((n) => n + 1);
+          handleRef.current?.broadcast({ kind: 'chatMessage', message: msg });
+        };
 
         if (gameStateRef.current) {
           // Resumed mid-game: the lobby is long over, go straight back to the board. The old
@@ -247,7 +373,7 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
     setGameState(initial);
     setPhase('active');
     persistRef.current();
-    handleRef.current?.broadcast({ kind: 'gameStarted', state: initial });
+    handleRef.current?.broadcast({ kind: 'gameStarted', state: initial, aiControlledPlayerIds: [...aiControlledRef.current] });
   }, [roomCode]);
 
   const dispatch = useCallback((action: Action): boolean => {
@@ -259,7 +385,7 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
       setGameState(next);
       setError(null);
       persistRef.current();
-      handleRef.current?.broadcast({ kind: 'stateSync', state: next });
+      handleRef.current?.broadcast({ kind: 'stateSync', state: next, aiControlledPlayerIds: [...aiControlledRef.current] });
       return true;
     } catch (err) {
       if (err instanceof IllegalActionError) {
@@ -269,6 +395,84 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
       throw err;
     }
   }, []);
+
+  // [DEFAULT — direct request: "toggle Human/AI mid game"] The host is the only device that ever
+  // runs AI decisions in P2P play — a joiner's own hooks/use-p2p-join.ts never calls decideAction
+  // at all, it only ever renders whatever stateSync says. Safe to call unconditionally: an empty
+  // aiControlledPlayerIds (the common case) or a null-ish gameState (still connecting/lobby, via
+  // useAiTurn's own null-state guard) both make this a no-op.
+  useAiTurn(gameState, aiControlledPlayerIds, dispatch);
+
+  const setSeatAiControl = useCallback((playerId: PlayerId, isAI: boolean) => {
+    if (isAI) aiControlledRef.current.add(playerId);
+    else aiControlledRef.current.delete(playerId);
+    const next = new Set(aiControlledRef.current);
+    setAiControlledPlayerIds(next);
+    if (gameStateRef.current) {
+      handleRef.current?.broadcast({ kind: 'stateSync', state: gameStateRef.current, aiControlledPlayerIds: [...next] });
+    }
+  }, []);
+
+  const kickPlayer = useCallback((playerId: PlayerId) => {
+    bannedPlayerIds.current.add(playerId);
+    const targetPeerIds = [...peerIdToPlayerId.current.entries()].filter(([, pid]) => pid === playerId).map(([peerId]) => peerId);
+    for (const peerId of targetPeerIds) handleRef.current?.send(peerId, { kind: 'kicked', reason: 'Removed by the host' });
+    // Give the message a moment to actually reach the wire before pulling the connection out from
+    // under it — same reasoning as transferHostTo's own send-then-close ordering below.
+    setTimeout(() => {
+      for (const peerId of targetPeerIds) handleRef.current?.disconnectPeer(peerId);
+    }, 250);
+
+    if (gameStateRef.current) {
+      // Mid-game: the seat still exists in GameState (there's no "remove a player" engine action,
+      // and turn order/determinism depend on the seat list staying stable) — put it under AI
+      // control so a kicked seat never just stalls the game waiting on a human who's gone.
+      aiControlledRef.current.add(playerId);
+      const next = new Set(aiControlledRef.current);
+      setAiControlledPlayerIds(next);
+      handleRef.current?.broadcast({ kind: 'stateSync', state: gameStateRef.current, aiControlledPlayerIds: [...next] });
+    } else if (playersRef.current.delete(playerId)) {
+      const list = syncLobbyStateRef.current();
+      handleRef.current?.broadcast({ kind: 'lobbyUpdate', players: list });
+    }
+  }, []);
+
+  const transferHostTo = useCallback(
+    (playerId: PlayerId) => {
+      if (!handleRef.current || !roomCode) return;
+      handleRef.current.broadcast({ kind: 'hostTransferring', toPlayerId: playerId });
+      // [DEFAULT — direct request: "transfer hosting to another player" — seamless live handoff]
+      // A brief delay so the broadcast above actually reaches the wire before this device tears
+      // its own connection down (mirrors kickPlayer's identical reasoning). After that: seed a
+      // join session under THIS SAME stable playerId (so the game keeps recognizing this seat as
+      // "them" once they reconnect as a plain joiner — see hooks/use-p2p-join.ts's
+      // stablePlayerIdFor, whose sessionStorage key this writes directly), clear the now-stale
+      // host session, close this device's own Peer (freeing the room code for the new host to
+      // claim — connectAsHost's SAME_CODE_RETRY_ATTEMPTS, lib/webrtc/peer-room.ts, already covers
+      // the race where the new host's connectAsHost call and this teardown overlap), and hand
+      // control back to components/p2p/P2PApp.tsx to mount hooks/use-p2p-join.ts in this hook's
+      // place.
+      setTimeout(() => {
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.setItem(`hexrealms-p2p-playerid-${roomCode}`, myPlayerId);
+        }
+        saveJoinSession({ roomCode, name: effectiveNameRef.current, color: effectiveColorRef.current });
+        clearHostSession();
+        handleRef.current?.close();
+        handleRef.current = null;
+        callbacksRef.current.onTransferredAway?.();
+      }, 300);
+    },
+    [roomCode, myPlayerId]
+  );
+
+  const sendChat = useCallback(
+    (text: string) => {
+      relayChatRef.current(text, myPlayerId);
+    },
+    [myPlayerId]
+  );
+  const markChatRead = useCallback(() => setUnreadChatCount(0), []);
 
   if (fatal) return { phase: 'error', message: fatal };
   if (phase === 'connecting') return { phase: 'connecting' };
@@ -282,7 +486,16 @@ export function useP2PHost(hostInfo: HostInfo): P2PHostPhase {
     state: gameState!,
     dispatch,
     error,
-    isMyTurn: gameState!.currentPlayerId === myPlayerId,
+    isMyTurn: gameState!.currentPlayerId === myPlayerId && !aiControlledPlayerIds.has(myPlayerId),
     myPlayerId,
+    players: lobbyPlayers,
+    aiControlledPlayerIds,
+    setSeatAiControl,
+    kickPlayer,
+    transferHostTo,
+    chatMessages,
+    unreadChatCount,
+    sendChat,
+    markChatRead,
   };
 }
