@@ -71,6 +71,8 @@ export function ChatPanel({ ctx }: { ctx: P2PRoomContext }) {
 
   const visibleMessages = chatMuted ? [] : ctx.chatMessages.filter((m) => !mutedPlayerIds.has(m.playerId));
   const otherPlayers = ctx.players.filter((p) => p.playerId !== ctx.myPlayerId);
+  const me = ctx.players.find((p) => p.playerId === ctx.myPlayerId);
+  const voiceParticipantCount = ctx.voiceEnabled ? ctx.remoteVoiceStreams.length + 1 : ctx.remoteVoiceStreams.length;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -111,7 +113,13 @@ export function ChatPanel({ ctx }: { ctx: P2PRoomContext }) {
         <div className="rounded-sm border border-hx-border bg-hx-panel-2 p-2">
           <div className="mb-1 flex items-center justify-between gap-2">
             <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Voice participants</span>
-            <span className="text-[10px] text-hx-ink-faint">{ctx.remoteVoiceStreams.length} live</span>
+            <span className="text-[10px] text-hx-ink-faint">{voiceParticipantCount} live</span>
+          </div>
+          <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+            <span style={{ color: me?.color ?? '#888888' }} className="truncate font-semibold">
+              {me?.name ?? 'You'} (You)
+            </span>
+            <span className="text-[10px] text-hx-ink-faint">{ctx.voiceMuted ? '🔇 Mic muted' : '🎤 Mic live'}</span>
           </div>
           {ctx.remoteVoiceStreams.length === 0 && <p className="text-xs text-hx-ink-faint">No one else is in voice yet.</p>}
           {ctx.remoteVoiceStreams.map((entry) => {
@@ -135,7 +143,13 @@ export function ChatPanel({ ctx }: { ctx: P2PRoomContext }) {
                   ref={(el) => {
                     if (!el) return;
                     audioRefs.current.set(entry.playerId, el);
-                    if (el.srcObject !== entry.stream) el.srcObject = entry.stream;
+                    if (el.srcObject !== entry.stream) {
+                      el.srcObject = entry.stream;
+                      void el.play().catch(() => {
+                        // Some browsers gate autoplay until a user gesture; Join Voice itself is
+                        // the intended gesture, but failing quietly keeps UI stable.
+                      });
+                    }
                   }}
                 />
               </div>

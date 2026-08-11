@@ -339,7 +339,6 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
   useEffect(() => {
     if (!joinProbeCode) return;
     let cancelled = false;
-    setJoinLobbyProbeResolvedCode('');
     const t = setTimeout(() => {
       if (!cancelled) setJoinLobbyProbeBusy(true);
       void probeLobby(joinProbeCode)

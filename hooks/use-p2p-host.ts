@@ -83,6 +83,8 @@ export interface UseP2PHostCallbacks {
 
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
+const VOICE_RETRY_INTERVAL_MS = 2000;
+const VOICE_CALL_STREAM_TIMEOUT_MS = 8000;
 
 function normalizeLobbyName(name: string): string {
   return name.trim().toLowerCase();
@@ -166,6 +168,7 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   const localVoiceStreamRef = useRef<MediaStream | null>(null);
   const voiceEnabledRef = useRef(false);
   const voiceMutedRef = useRef(false);
+  const voiceRetryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inboundVoiceUnsubRef = useRef<(() => void) | null>(null);
   const callbacksRef = useRef(callbacks);
   useEffect(() => {
@@ -211,22 +214,42 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     (playerId: PlayerId, call: MediaConnection) => {
       const existing = voiceCallsRef.current.get(playerId);
       if (existing && existing !== call) {
-        call.close();
-        return;
+        existing.close();
+        voiceCallsRef.current.delete(playerId);
       }
       voiceCallsRef.current.set(playerId, call);
+      let streamArrived = false;
+      const streamTimeout = setTimeout(() => {
+        if (streamArrived) return;
+        // A stuck call blocks retries forever if it never emits stream/close/error.
+        call.close();
+        detachVoiceCall(playerId, call);
+      }, VOICE_CALL_STREAM_TIMEOUT_MS);
       call.on('stream', (stream) => {
+        streamArrived = true;
+        clearTimeout(streamTimeout);
         voiceRemoteRef.current.set(playerId, stream);
         refreshRemoteVoiceStreams();
       });
-      call.on('close', () => detachVoiceCall(playerId, call));
-      call.on('error', () => detachVoiceCall(playerId, call));
+      call.on('close', () => {
+        clearTimeout(streamTimeout);
+        detachVoiceCall(playerId, call);
+      });
+      call.on('error', () => {
+        clearTimeout(streamTimeout);
+        detachVoiceCall(playerId, call);
+      });
     },
     [detachVoiceCall, refreshRemoteVoiceStreams]
   );
 
   const syncVoiceConnections = useCallback(() => {
     if (!voiceEnabledRef.current || !localVoiceStreamRef.current) return;
+    const setLocalMicState = () => {
+      if (!localVoiceStreamRef.current) return;
+      for (const track of localVoiceStreamRef.current.getAudioTracks()) track.enabled = !voiceMutedRef.current;
+    };
+    setLocalMicState();
     const handle = handleRef.current;
     if (!handle) return;
     const shouldConnectTo = new Set<PlayerId>();
@@ -257,6 +280,10 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     refreshRemoteVoiceStreams();
     localVoiceStreamRef.current?.getTracks().forEach((t) => t.stop());
     localVoiceStreamRef.current = null;
+    if (voiceRetryTimerRef.current) {
+      clearInterval(voiceRetryTimerRef.current);
+      voiceRetryTimerRef.current = null;
+    }
   }, [refreshRemoteVoiceStreams]);
 
   useEffect(() => () => stopVoice(), [stopVoice]);
@@ -454,6 +481,7 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             call.close();
             return;
           }
+          for (const track of localVoiceStreamRef.current.getAudioTracks()) track.enabled = !voiceMutedRef.current;
           call.answer(localVoiceStreamRef.current);
           bindVoiceCall(fromPlayerId, call);
         });
@@ -650,7 +678,7 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localVoiceStreamRef.current = stream;
       stream.getAudioTracks().forEach((t) => {
-        t.enabled = true;
+        t.enabled = !voiceMutedRef.current;
       });
       voiceEnabledRef.current = true;
       voiceMutedRef.current = false;
@@ -658,6 +686,11 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
       setVoiceMuted(false);
       setVoiceError(null);
       syncVoiceConnections();
+      if (!voiceRetryTimerRef.current) {
+        voiceRetryTimerRef.current = setInterval(() => {
+          syncVoiceConnections();
+        }, VOICE_RETRY_INTERVAL_MS);
+      }
     } catch {
       setVoiceError('Microphone access failed. Check browser permissions and try again.');
     }

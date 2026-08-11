@@ -70,6 +70,8 @@ export interface UseP2PJoinCallbacks {
 // chance to come back.
 const RECONNECT_ATTEMPTS = 8;
 const RECONNECT_DELAY_MS = 2500;
+const VOICE_RETRY_INTERVAL_MS = 2000;
+const VOICE_CALL_STREAM_TIMEOUT_MS = 8000;
 
 function stableVoiceInitiator(a: PlayerId, b: PlayerId): boolean {
   return a < b;
@@ -104,6 +106,7 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
   const localVoiceStreamRef = useRef<MediaStream | null>(null);
   const voiceEnabledRef = useRef(false);
   const voiceMutedRef = useRef(false);
+  const voiceRetryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inboundVoiceUnsubRef = useRef<(() => void) | null>(null);
   // [DEFAULT — direct request: "kick a player"] Checked in onHostDisconnected below — a kicked
   // peer's connection closing looks IDENTICAL to a real network drop at the transport level, but
@@ -154,22 +157,41 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
     (playerId: PlayerId, call: MediaConnection) => {
       const existing = voiceCallsRef.current.get(playerId);
       if (existing && existing !== call) {
-        call.close();
-        return;
+        existing.close();
+        voiceCallsRef.current.delete(playerId);
       }
       voiceCallsRef.current.set(playerId, call);
+      let streamArrived = false;
+      const streamTimeout = setTimeout(() => {
+        if (streamArrived) return;
+        call.close();
+        detachVoiceCall(playerId, call);
+      }, VOICE_CALL_STREAM_TIMEOUT_MS);
       call.on('stream', (stream) => {
+        streamArrived = true;
+        clearTimeout(streamTimeout);
         voiceRemoteRef.current.set(playerId, stream);
         refreshRemoteVoiceStreams();
       });
-      call.on('close', () => detachVoiceCall(playerId, call));
-      call.on('error', () => detachVoiceCall(playerId, call));
+      call.on('close', () => {
+        clearTimeout(streamTimeout);
+        detachVoiceCall(playerId, call);
+      });
+      call.on('error', () => {
+        clearTimeout(streamTimeout);
+        detachVoiceCall(playerId, call);
+      });
     },
     [detachVoiceCall, refreshRemoteVoiceStreams]
   );
 
   const syncVoiceConnections = useCallback(() => {
     if (!voiceEnabledRef.current || !localVoiceStreamRef.current) return;
+    const setLocalMicState = () => {
+      if (!localVoiceStreamRef.current) return;
+      for (const track of localVoiceStreamRef.current.getAudioTracks()) track.enabled = !voiceMutedRef.current;
+    };
+    setLocalMicState();
     const handle = handleRef.current;
     if (!handle) return;
     const shouldConnectTo = new Set<PlayerId>();
@@ -200,6 +222,10 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
     refreshRemoteVoiceStreams();
     localVoiceStreamRef.current?.getTracks().forEach((t) => t.stop());
     localVoiceStreamRef.current = null;
+    if (voiceRetryTimerRef.current) {
+      clearInterval(voiceRetryTimerRef.current);
+      voiceRetryTimerRef.current = null;
+    }
   }, [refreshRemoteVoiceStreams]);
 
   useEffect(() => () => stopVoice(), [stopVoice]);
@@ -321,6 +347,7 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
             call.close();
             return;
           }
+          for (const track of localVoiceStreamRef.current.getAudioTracks()) track.enabled = !voiceMutedRef.current;
           call.answer(localVoiceStreamRef.current);
           bindVoiceCall(from.playerId, call);
         });
@@ -386,7 +413,7 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localVoiceStreamRef.current = stream;
       stream.getAudioTracks().forEach((t) => {
-        t.enabled = true;
+        t.enabled = !voiceMutedRef.current;
       });
       voiceEnabledRef.current = true;
       voiceMutedRef.current = false;
@@ -394,6 +421,11 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
       setVoiceMuted(false);
       setVoiceError(null);
       syncVoiceConnections();
+      if (!voiceRetryTimerRef.current) {
+        voiceRetryTimerRef.current = setInterval(() => {
+          syncVoiceConnections();
+        }, VOICE_RETRY_INTERVAL_MS);
+      }
     } catch {
       setVoiceError('Microphone access failed. Check browser permissions and try again.');
     }
