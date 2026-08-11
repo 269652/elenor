@@ -140,10 +140,26 @@ function eventsOfType(state: GameState, type: string) {
 function advanceToGather(state: GameState): GameState {
   const actorId = state.currentPlayerId;
   expect(state.currentPhase).toBe(Phase.DrawAndPlaceTile);
-  let s = applyAction(state, { type: 'AdvancePhase', actorId }); // -> MoveHero
+  // §3: drawing a tile each turn is mandatory before Phase 1 can be left (reducers.ts's
+  // requireTileDrawnThisTurn) — draw here so this pass-through-Phase-1 helper honestly
+  // satisfies the rule the same way a real turn would.
+  let s = applyAction(state, { type: 'DrawTile', actorId });
+  s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> MoveHero
   s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> Gather
   expect(s.currentPhase).toBe(Phase.Gather);
   return s;
+}
+
+/** EndTurn from wherever `state` currently sits, drawing the mandatory §3 tile first if the
+ *  active player is still parked in Phase 1 (used for the "other" player's turn, which these
+ *  tests never route through advanceToGather). */
+function safeEndTurn(state: GameState): GameState {
+  const actorId = state.currentPlayerId;
+  const drawn =
+    state.currentPhase === Phase.DrawAndPlaceTile && state.pendingTileDraw === null && !state.hasPlacedTileThisTurn
+      ? applyAction(state, { type: 'DrawTile', actorId })
+      : state;
+  return applyAction(drawn, { type: 'EndTurn', actorId });
 }
 
 // ── edgeKey ────────────────────────────────────────────────────────────────────────────────
@@ -393,8 +409,8 @@ describe('collectRoadConnectedTiles: the payoff, through the real turn flow', ()
 
     for (let i = 0; i < 8; i++) {
       state = advanceToGather(state);
-      state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId }); // p1 -> p2
-      state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId }); // p2 -> p1
+      state = safeEndTurn(state); // p1 -> p2
+      state = safeEndTurn(state); // p2 -> p1
     }
 
     expect(tileAt(state, A)!.stockpile.Wood).toBe(0);

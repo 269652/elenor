@@ -1692,8 +1692,24 @@ function requireNoPendingDoorMonster(state: GameState, actorId: PlayerId) {
   }
 }
 
+/** [BUG FIX — reducer never enforced this, only the UI did (GameBoardApp.tsx's noTileDrawnYet
+ *  disabling the Next Phase/End Turn buttons)] §3: drawing a tile each turn is mandatory —
+ *  placement follows immediately if a legal hex exists (§3.2's "no legal hex exists" case still
+ *  leaves `pendingTileDraw` set, so that edge case clears this same check). Mirrors
+ *  requireNoPendingDoorMonster's shape/placement: a no-op once a tile's been drawn or placed this
+ *  turn, called from both ways Phase 1 can be left (AdvancePhase stepping past it, and the EndTurn
+ *  shortcut skipping straight out of it). Closes a gap a stale/buggy client render — or, in P2P,
+ *  a joiner's optimistic action racing ahead of a sync — could otherwise slip through, since
+ *  before this the host's own authoritative applyAction had nothing stopping it either. */
+function requireTileDrawnThisTurn(state: GameState) {
+  if (state.currentPhase !== Phase.DrawAndPlaceTile) return;
+  if (state.pendingTileDraw !== null || state.hasPlacedTileThisTurn) return;
+  throw new IllegalActionError('Draw a tile before leaving Phase 1 (§3: drawing a tile each turn is mandatory)');
+}
+
 function endTurn(state: GameState, actorId: PlayerId): GameState {
   requireNoPendingDoorMonster(state, actorId);
+  requireTileDrawnThisTurn(state);
   const withRoundEnd = produce(state, (draft) => {
     pushEvent(draft, actorId, 'TurnEnded', {});
     const { newRound } = nextPlayerId(draft);
@@ -1720,6 +1736,7 @@ export function applyAdvancePhase(state: GameState, action: { actorId: PlayerId 
   if (state.currentPhase === Phase.Fight) {
     requireNoPendingDoorMonster(state, action.actorId);
   }
+  requireTileDrawnThisTurn(state);
   const nextPhase = (state.currentPhase + 1) as Phase;
   return produce(state, (draft) => {
     draft.currentPhase = nextPhase;

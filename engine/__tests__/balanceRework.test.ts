@@ -266,9 +266,25 @@ describe('Barracks: passive Soldier production & reserve cap (balance rework)', 
 
     function advanceToGather(s: GameState): GameState {
       const actorId = s.currentPlayerId;
-      let x = applyAction(s, { type: 'AdvancePhase', actorId }); // -> MoveHero
+      // §3: drawing a tile each turn is mandatory before Phase 1 can be left (reducers.ts's
+      // requireTileDrawnThisTurn) — draw here so this pass-through-Phase-1 helper honestly
+      // satisfies the rule the same way a real turn would.
+      let x = applyAction(s, { type: 'DrawTile', actorId });
+      x = applyAction(x, { type: 'AdvancePhase', actorId }); // -> MoveHero
       x = applyAction(x, { type: 'AdvancePhase', actorId }); // -> Gather (accumulation fires here)
       return x;
+    }
+
+    /** EndTurn from wherever `s` currently sits, drawing the mandatory §3 tile first if the
+     *  active player is still parked in Phase 1 (e.g. the OTHER player's turn, which this test
+     *  never routes through advanceToGather). */
+    function safeEndTurn(s: GameState): GameState {
+      const actorId = s.currentPlayerId;
+      const drawn =
+        s.currentPhase === Phase.DrawAndPlaceTile && s.pendingTileDraw === null && !s.hasPlacedTileThisTurn
+          ? applyAction(s, { type: 'DrawTile', actorId })
+          : s;
+      return applyAction(drawn, { type: 'EndTurn', actorId });
     }
 
     // [DEFAULT — balance rework pass 3] The rate is territory-scaled, not flat: p1 holds a single
@@ -276,8 +292,8 @@ describe('Barracks: passive Soldier production & reserve cap (balance rework)', 
     const perRound = soldiersPerRoundFor(1);
     state = advanceToGather(state); // p1's first production step: militiaCount 0 -> perRound
     expect(tileAt(state, capital)?.militiaCount).toBe(perRound);
-    state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId }); // p1 -> p2
-    state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId }); // p2 -> p1 (new round, upkeep charged)
+    state = safeEndTurn(state); // p1 -> p2
+    state = safeEndTurn(state); // p2 -> p1 (new round, upkeep charged)
 
     // Enough further rounds that an UNCLAMPED reserve would overshoot the cap outright —
     // otherwise this lands on BARRACKS_RESERVE_CAP by arithmetic coincidence and never actually
@@ -286,8 +302,8 @@ describe('Barracks: passive Soldier production & reserve cap (balance rework)', 
     expect(perRound * (extraRounds + 1)).toBeGreaterThan(BARRACKS_RESERVE_CAP);
     for (let i = 0; i < extraRounds; i++) {
       state = advanceToGather(state);
-      state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId });
-      state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId });
+      state = safeEndTurn(state);
+      state = safeEndTurn(state);
     }
 
     expect(tileAt(state, capital)?.militiaCount).toBe(BARRACKS_RESERVE_CAP);
@@ -509,7 +525,9 @@ describe('Multi-tier building upgrades (UpgradeBuildingAction, balance rework)',
 
   it.each([1, 2, 3, 4, 5])('a tier %i CowStable actually stockpiles that much Meat in one production step', (tier) => {
     const { state: base, coord } = tierFixture('CowStable', 'Plains', tier, {});
-    let state = { ...base, currentPhase: Phase.DrawAndPlaceTile };
+    // Phase 1 is a pure pass-through here (not under test), so satisfy §3's "drew a tile this
+    // turn" reducer guard directly on the fixture rather than actually drawing one.
+    let state = { ...base, currentPhase: Phase.DrawAndPlaceTile, hasPlacedTileThisTurn: true };
     state = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> MoveHero
     state = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> Gather (accumulation fires)
     expect(tileAt(state, coord)?.stockpile.Meat).toBe(tier);
@@ -616,9 +634,11 @@ describe('TILE_STOCKPILE_CAP (balance rework: lowered 10 -> 5)', () => {
 
     // Ten full rounds without a single Gather — far more production than the cap allows.
     for (let i = 0; i < 10; i++) {
+      state = applyAction(state, { type: 'DrawTile', actorId: 'p1' }); // §3: mandatory before leaving Phase 1
       state = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> MoveHero
       state = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> Gather (accumulate)
       state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId }); // p1 -> p2
+      state = applyAction(state, { type: 'DrawTile', actorId: state.currentPlayerId }); // p2's mandatory §3 draw
       state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId }); // p2 -> p1, new round
     }
 
@@ -646,6 +666,7 @@ describe('TILE_STOCKPILE_CAP (balance rework: lowered 10 -> 5)', () => {
       makeTile({ coord: p2Capital, type: 'Plains', ownerId: 'p2' }),
     ];
     let state = fixtureState([p1, p2], tiles, { turnOrder: ['p1', 'p2'], currentPlayerId: 'p1', currentPhase: Phase.DrawAndPlaceTile });
+    state = applyAction(state, { type: 'DrawTile', actorId: 'p1' }); // §3: mandatory before leaving Phase 1
     state = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> MoveHero
     state = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> Gather (accumulate 5 Meat)
     expect(tileAt(state, capital)?.stockpile.Meat).toBe(TILE_STOCKPILE_CAP);

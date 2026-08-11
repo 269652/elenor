@@ -149,12 +149,25 @@ function ownsTile(player: Player, coord: HexCoord): boolean {
   return player.ownedTiles.some((c) => hexKey(c) === hexKey(coord));
 }
 
+/** EndTurn from wherever `state` currently sits, drawing the mandatory §3 tile first (reducers.ts's
+ *  requireTileDrawnThisTurn) if the active player is still parked in Phase 1 having drawn nothing
+ *  this turn — a drop-in EndTurn shortcut for tests that just want to cycle turns/rounds without
+ *  actually exercising Phase 1 draw/place behavior. */
+function safeEndTurn(state: GameState): GameState {
+  const actorId = state.currentPlayerId;
+  const drawn =
+    state.currentPhase === Phase.DrawAndPlaceTile && state.pendingTileDraw === null && !state.hasPlacedTileThisTurn
+      ? applyAction(state, { type: 'DrawTile', actorId })
+      : state;
+  return applyAction(drawn, { type: 'EndTurn', actorId });
+}
+
 /** Ends turns until it is `playerId`'s turn again — always at least one EndTurn, so this is
  *  genuinely "their NEXT turn" even when called while they are the active player. */
 function advanceToNextTurnOf(state: GameState, playerId: PlayerId): GameState {
-  let s = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId });
+  let s = safeEndTurn(state);
   for (let guard = 0; s.currentPlayerId !== playerId && guard < 12; guard++) {
-    s = applyAction(s, { type: 'EndTurn', actorId: s.currentPlayerId });
+    s = safeEndTurn(s);
   }
   expect(s.currentPlayerId).toBe(playerId);
   return s;
@@ -176,6 +189,12 @@ function advanceClaimWindow(state: GameState, playerId: PlayerId, rounds: number
 /** Walks the active player from their freshly-started turn (Phase 1) up to Phase 5. */
 function toBuildPhase(state: GameState): GameState {
   let s = state;
+  // §3: drawing a tile each turn is mandatory before Phase 1 can be left (reducers.ts's
+  // requireTileDrawnThisTurn) — draw here so this pass-through-Phase-1 helper honestly
+  // satisfies the rule the same way a real turn would.
+  if (s.currentPhase === Phase.DrawAndPlaceTile && s.pendingTileDraw === null && !s.hasPlacedTileThisTurn) {
+    s = applyAction(s, { type: 'DrawTile', actorId: s.currentPlayerId });
+  }
   for (let guard = 0; s.currentPhase !== Phase.Build && guard < 8; guard++) {
     s = applyAction(s, { type: 'AdvancePhase', actorId: s.currentPlayerId });
   }
@@ -699,7 +718,7 @@ describe('Soldier upkeep is charged on troops standing on FOREIGN ground', () =>
   it('does not bill the tile\'s OWNER for someone else\'s garrison sitting on it', () => {
     const state = invasionFixture(5, 10);
     let s = applyAction(state, { type: 'EndTurn', actorId: 'first' }); // p1's turn — p1 pays
-    s = applyAction(s, { type: 'EndTurn', actorId: 'p1' }); // p2's turn — p2 must NOT pay
+    s = safeEndTurn(s); // p2's turn — p2 must NOT pay
     expect(s.currentPlayerId).toBe('p2');
     expect(playerIn(s, 'p2').resources.Food).toBe(50);
     expect(s.eventLog.filter((e) => e.type === 'SoldierUpkeepPaid' && e.actorId === 'p2')).toHaveLength(0);
@@ -853,7 +872,9 @@ describe('Occupier-vs-owner: every writer of militiaCount respects garrisonOwner
     // round's recruits straight onto the enemy stack standing on it (2 -> 3, still garrisoned by
     // p2). The same loop's `currentArmy` throttle also counts enemy garrisons on owned tiles as
     // p1's while ignoring p1's own troops abroad, so it can disagree with resolveSoldierUpkeep.
-    const state = { ...occupiedHomeFixture(0, 2, true), currentPhase: Phase.DrawAndPlaceTile };
+    // Phase 1 is a pure pass-through here (not under test), so satisfy §3's "drew a tile this
+    // turn" reducer guard directly on the fixture rather than actually drawing one.
+    const state = { ...occupiedHomeFixture(0, 2, true), currentPhase: Phase.DrawAndPlaceTile, hasPlacedTileThisTurn: true };
     let s = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> MoveHero
     s = applyAction(s, { type: 'AdvancePhase', actorId: 'p1' }); // -> Gather (production fires)
     const barracks = tileAt(s, P1_CAPITAL)!;

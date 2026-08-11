@@ -18,8 +18,12 @@ export default function P2PJoinLinkPage({ params }: { params: Promise<{ roomCode
   const { roomCode } = use(params);
   const router = useRouter();
 
+  // [DEFAULT — direct request: "WebRTC screens should render exactly the same as hotseat UI
+  // elements and make use of whole screen"] Plain h-dvh block, matching app/page.tsx's <main>
+  // exactly — P2PApp owns its own per-screen centering now (see components/p2p/P2PApp.tsx's
+  // CenteredScreen), so the active game board can fill this the same way HotseatApp's does.
   return (
-    <main className="flex h-dvh items-center justify-center overflow-y-auto p-4">
+    <main className="h-dvh">
       <P2PApp initialRoomCode={roomCode} onExit={() => router.push('/')} />
     </main>
   );

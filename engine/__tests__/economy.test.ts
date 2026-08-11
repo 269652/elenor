@@ -17,6 +17,10 @@ function advanceToGather(state: ReturnType<typeof createGame>) {
   let s = state;
   const actorId = s.currentPlayerId;
   expect(s.currentPhase).toBe(Phase.DrawAndPlaceTile);
+  // §3: drawing a tile each turn is mandatory before Phase 1 can be left (reducers.ts's
+  // requireTileDrawnThisTurn) — draw here so this pass-through-Phase-1 helper honestly
+  // satisfies the rule the same way a real turn would.
+  s = applyAction(s, { type: 'DrawTile', actorId });
   s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> MoveHero
   s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> Gather (accumulation fires here)
   expect(s.currentPhase).toBe(Phase.Gather);

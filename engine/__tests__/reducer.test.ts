@@ -9,6 +9,17 @@ const PLAYERS = [
   { id: 'p2', name: 'Bob', color: '#0f0' },
 ];
 
+/** EndTurn from wherever `state` currently sits, drawing the mandatory §3 tile first (reducers.ts's
+ *  requireTileDrawnThisTurn) if the active player is still parked in Phase 1 having drawn nothing
+ *  this turn — a drop-in EndTurn shortcut for tests that just want to cycle turns/rounds. */
+function safeEndTurn(state: ReturnType<typeof createGame>, actorId: string) {
+  const drawn =
+    state.currentPhase === Phase.DrawAndPlaceTile && state.pendingTileDraw === null && !state.hasPlacedTileThisTurn
+      ? applyAction(state, { type: 'DrawTile', actorId })
+      : state;
+  return applyAction(drawn, { type: 'EndTurn', actorId });
+}
+
 describe('reducer integration — a full turn through all six phases', () => {
   it('walks Phase 1 -> 5 for player 1, then hands the turn to player 2 with Phase 0 auto-resolved', () => {
     let state = createGame('g1', PLAYERS, 'turn-flow-seed', 'hotseat');
@@ -96,7 +107,7 @@ describe('reducer integration — a full turn through all six phases', () => {
     // Fast-forward both players through a full turn each via AdvancePhase/EndTurn only.
     for (let i = 0; i < 2; i++) {
       const actor = state.currentPlayerId;
-      state = applyAction(state, { type: 'EndTurn', actorId: actor });
+      state = safeEndTurn(state, actor);
     }
     expect(state.roundNumber).toBe(2);
   });
@@ -127,7 +138,7 @@ describe('EndTurn/AdvancePhase skip eliminated seats (reducers.ts nextPlayerId)'
     const [first, second, third] = state.turnOrder;
     state = eliminate(state, second);
 
-    state = applyAction(state, { type: 'EndTurn', actorId: first });
+    state = safeEndTurn(state, first);
     expect(state.currentPlayerId).toBe(third); // NOT second — they're eliminated
   });
 
@@ -136,9 +147,9 @@ describe('EndTurn/AdvancePhase skip eliminated seats (reducers.ts nextPlayerId)'
     const [first, second, third] = state.turnOrder;
     state = eliminate(state, second);
 
-    state = applyAction(state, { type: 'EndTurn', actorId: first }); // -> third
+    state = safeEndTurn(state, first); // -> third
     expect(state.currentPlayerId).toBe(third);
-    state = applyAction(state, { type: 'EndTurn', actorId: third }); // wraps past `second`, back to first
+    state = safeEndTurn(state, third); // wraps past `second`, back to first
     expect(state.currentPlayerId).toBe(first);
     expect(state.roundNumber).toBe(2); // a full round DID complete (first, [skip second], third), not stalled
   });
@@ -149,9 +160,9 @@ describe('EndTurn/AdvancePhase skip eliminated seats (reducers.ts nextPlayerId)'
     let state = createGame('g-elim-3', THREE_PLAYERS, 'elim-seed-3', 'hotseat');
     const [first, second, third] = state.turnOrder;
     state = eliminate(state, third);
-    state = applyAction(state, { type: 'EndTurn', actorId: first }); // -> second (third eliminated, not next-in-line anyway)
+    state = safeEndTurn(state, first); // -> second (third eliminated, not next-in-line anyway)
     expect(state.currentPlayerId).toBe(second);
-    state = applyAction(state, { type: 'EndTurn', actorId: second }); // wraps past eliminated third, back to first
+    state = safeEndTurn(state, second); // wraps past eliminated third, back to first
     expect(state.currentPlayerId).toBe(first);
   });
 });

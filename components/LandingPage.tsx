@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import Image from 'next/image';
 import { HotseatApp } from '@/components/HotseatApp';
 import { P2PApp } from '@/components/p2p/P2PApp';
@@ -13,25 +13,33 @@ import { loadHostSession, loadJoinSession } from '@/lib/webrtc/persistence';
 type Tab = 'menu' | 'local' | 'online' | 'p2p';
 
 export function LandingPage({ supabaseConfigured }: { supabaseConfigured: boolean }) {
-  // [DEFAULT — direct request: "it should rather directly reload into the open session"] A
-  // reload always remounts LandingPage fresh — without this check it would default to 'menu'
-  // and require an extra manual click back into hotseat/P2P before either mode's OWN resume
-  // logic (HotseatApp.tsx, components/p2p/P2PApp.tsx) ever got a chance to run. Checked once,
-  // here, so the very first render already knows which screen to land on.
-  const [tab, setTab] = useState<Tab>(() => {
-    if (loadHotseatSession()) return 'local';
-    if (loadHostSession() || loadJoinSession()) return 'p2p';
-    return 'menu';
-  });
+  // [BUG FIX] `tab`'s initial value used to be computed straight from localStorage/sessionStorage
+  // in this useState initializer. That runs during SSR too (where `window` is undefined, so it
+  // always resolved to 'menu') AND during the client's first hydration pass (where it could
+  // resolve to 'local'/'p2p') — a genuine hydration mismatch, since React requires the client's
+  // very first render to match what the server sent. `tab` now starts at `null` on BOTH server
+  // and client (deterministic either way), and useLayoutEffect below — which only ever runs on
+  // the client, synchronously right after the DOM commits but before the browser paints —
+  // resolves the real tab immediately after. Net effect: no mismatch, and (since it beats paint)
+  // no visible flash of the wrong screen either — see [DEFAULT — direct request: "it should
+  // rather directly reload into the open session"] below for why landing on the right screen
+  // immediately matters here specifically.
+  const [tab, setTab] = useState<Tab | null>(null);
+  useLayoutEffect(() => {
+    if (loadHotseatSession()) setTab('local');
+    else if (loadHostSession() || loadJoinSession()) setTab('p2p');
+    else setTab('menu');
+  }, []);
+  if (tab === null) return null;
 
   if (tab === 'local') return <HotseatApp />;
-  if (tab === 'p2p') {
-    return (
-      <div className="flex h-full w-full items-center justify-center overflow-y-auto p-4">
-        <P2PApp onExit={() => setTab('menu')} />
-      </div>
-    );
-  }
+  // [DEFAULT — direct request: "WebRTC screens should render exactly the same as hotseat UI
+  // elements and make use of whole screen"] No wrapper here, same as the 'local' branch above —
+  // P2PApp now owns its own per-screen centering (components/p2p/P2PApp.tsx's CenteredScreen),
+  // scoped to setup/lobby screens only, so the active game board is free to fill this page's
+  // natural full block width/height exactly like HotseatApp's GameBoardApp does. A centering
+  // flex wrapper here would shrink-wrap the board back down to its content size.
+  if (tab === 'p2p') return <P2PApp onExit={() => setTab('menu')} />;
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden">

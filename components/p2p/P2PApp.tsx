@@ -9,7 +9,7 @@
  * calls its connecting hook) once the player has actually committed to hosting/joining.
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { GameBoardApp } from '@/components/GameBoardApp';
 import { BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 import { useP2PHost, type P2PHostPhase } from '@/hooks/use-p2p-host';
@@ -25,6 +25,18 @@ function randomDefaultName(): string {
 }
 
 // ── Shared bits ──────────────────────────────────────────────────────────────────────────────
+
+/** [DEFAULT — direct request: "WebRTC screens should render exactly the same as hotseat UI
+ *  elements and make use of whole screen"] Every non-game P2P screen (menu, setup, lobby,
+ *  connecting, error) wants the same centered-panel treatment components/HotseatApp.tsx gives its
+ *  own setup screen — but the ACTIVE GAME BOARD must not be wrapped in this: HotseatApp's
+ *  LocalGame returns GameBoardApp completely unwrapped so its grid fills the page's natural block
+ *  width/height, and P2PHostRoom/P2PJoinRoom below now do the same for their own game-board
+ *  return. Scoping the centering to just this wrapper (used per-screen, not once around the whole
+ *  of P2PApp) is what makes that possible. */
+function CenteredScreen({ children }: { children: ReactNode }) {
+  return <div className="flex h-full w-full items-center justify-center overflow-y-auto p-4">{children}</div>;
+}
 
 function ConnectingScreen({ label }: { label: string }) {
   return (
@@ -132,9 +144,11 @@ function P2PHostRoom({ name, color, onBack, onLeave }: { name: string; color: st
   const hostInfo = useMemo(() => ({ name, color }), [name, color]);
   const result = useP2PHost(hostInfo);
 
-  if (result.phase === 'connecting') return <ConnectingScreen label="Opening a room…" />;
-  if (result.phase === 'error') return <ErrorScreen message={result.message} onBack={onBack} />;
-  if (result.phase === 'lobby') return <HostLobby hostState={result} onLeave={onLeave} />;
+  if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label="Opening a room…" /></CenteredScreen>;
+  if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
+  if (result.phase === 'lobby') return <CenteredScreen><HostLobby hostState={result} onLeave={onLeave} /></CenteredScreen>;
+  // Unwrapped, same as components/HotseatApp.tsx's LocalGame — GameBoardApp's own grid fills the
+  // page's full block width/height; a centering wrapper here would shrink it to content size.
   return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} />;
 }
 
@@ -156,22 +170,25 @@ function P2PJoinRoom({
   const myInfo = useMemo(() => ({ name, color }), [name, color]);
   const result: P2PJoinPhase = useP2PJoin(roomCode, myInfo);
 
-  if (result.phase === 'connecting') return <ConnectingScreen label={`Connecting to room ${roomCode}…`} />;
-  if (result.phase === 'error') return <ErrorScreen message={result.message} onBack={onBack} />;
+  if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label={`Connecting to room ${roomCode}…`} /></CenteredScreen>;
+  if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
   if (result.phase === 'lobby') {
     return (
-      <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-4`}>
-        <div className="flex flex-col gap-1">
-          <h2 className="font-display text-xl font-bold text-hx-ink">🚪 Room {roomCode}</h2>
-          <p className="text-sm text-hx-ink-dim">Waiting for the host to start the game…</p>
+      <CenteredScreen>
+        <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-4`}>
+          <div className="flex flex-col gap-1">
+            <h2 className="font-display text-xl font-bold text-hx-ink">🚪 Room {roomCode}</h2>
+            <p className="text-sm text-hx-ink-dim">Waiting for the host to start the game…</p>
+          </div>
+          <LobbyRoster players={result.players} />
+          <button type="button" onClick={onLeave} className={BTN_GHOST}>
+            ✖ Leave room
+          </button>
         </div>
-        <LobbyRoster players={result.players} />
-        <button type="button" onClick={onLeave} className={BTN_GHOST}>
-          ✖ Leave room
-        </button>
-      </div>
+      </CenteredScreen>
     );
   }
+  // Unwrapped — see P2PHostRoom's identical comment above.
   return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} />;
 }
 
@@ -260,39 +277,43 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
 
   if (screen === 'menu') {
     return (
-      <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
-        <div className="flex flex-col gap-1">
-          <h2 className="font-display text-xl font-bold text-hx-ink">🔗 Play P2P (WebRTC)</h2>
-          <p className="text-sm text-hx-ink-dim">
-            Direct browser-to-browser play — no account, no room database. One player hosts and shares a code; everyone
-            else connects straight to them.
-          </p>
+      <CenteredScreen>
+        <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
+          <div className="flex flex-col gap-1">
+            <h2 className="font-display text-xl font-bold text-hx-ink">🔗 Play P2P (WebRTC)</h2>
+            <p className="text-sm text-hx-ink-dim">
+              Direct browser-to-browser play — no account, no room database. One player hosts and shares a code; everyone
+              else connects straight to them.
+            </p>
+          </div>
+          <button type="button" onClick={() => setScreen('host-setup')} className={BTN_PRIMARY}>
+            🏰 Host a room
+          </button>
+          <button type="button" onClick={() => setScreen('join-setup')} className={BTN_SECONDARY}>
+            🚪 Join a room
+          </button>
+          <button type="button" onClick={exitP2P} className={BTN_GHOST}>
+            ← Back
+          </button>
         </div>
-        <button type="button" onClick={() => setScreen('host-setup')} className={BTN_PRIMARY}>
-          🏰 Host a room
-        </button>
-        <button type="button" onClick={() => setScreen('join-setup')} className={BTN_SECONDARY}>
-          🚪 Join a room
-        </button>
-        <button type="button" onClick={exitP2P} className={BTN_GHOST}>
-          ← Back
-        </button>
-      </div>
+      </CenteredScreen>
     );
   }
 
   if (screen === 'host-setup') {
     return (
-      <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
-        <h2 className="font-display text-xl font-bold text-hx-ink">🏰 Host a room</h2>
-        {nameColorFields}
-        <button type="button" onClick={() => setScreen('host-room')} className={BTN_PRIMARY}>
-          Create Room
-        </button>
-        <button type="button" onClick={() => setScreen('menu')} className={BTN_GHOST}>
-          ← Back
-        </button>
-      </div>
+      <CenteredScreen>
+        <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
+          <h2 className="font-display text-xl font-bold text-hx-ink">🏰 Host a room</h2>
+          {nameColorFields}
+          <button type="button" onClick={() => setScreen('host-room')} className={BTN_PRIMARY}>
+            Create Room
+          </button>
+          <button type="button" onClick={() => setScreen('menu')} className={BTN_GHOST}>
+            ← Back
+          </button>
+        </div>
+      </CenteredScreen>
     );
   }
 
@@ -307,40 +328,42 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
     const trimmedCode = normalizeRoomCode(roomCodeInput);
     const canJoin = isPlausibleRoomCode(trimmedCode) && name.trim().length > 0;
     return (
-      <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
-        <h2 className="font-display text-xl font-bold text-hx-ink">🚪 Join a room</h2>
-        <div className="flex flex-col gap-1">
-          <label className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Room code</label>
-          <input
-            value={roomCodeInput}
-            onChange={(e) => setRoomCodeInput(e.target.value)}
-            placeholder="ABCDE"
-            maxLength={5}
-            className={`${INPUT} font-mono uppercase tracking-[0.3em]`}
-          />
+      <CenteredScreen>
+        <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
+          <h2 className="font-display text-xl font-bold text-hx-ink">🚪 Join a room</h2>
+          <div className="flex flex-col gap-1">
+            <label className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Room code</label>
+            <input
+              value={roomCodeInput}
+              onChange={(e) => setRoomCodeInput(e.target.value)}
+              placeholder="ABCDE"
+              maxLength={5}
+              className={`${INPUT} font-mono uppercase tracking-[0.3em]`}
+            />
+          </div>
+          {nameColorFields}
+          <button
+            type="button"
+            disabled={!canJoin}
+            onClick={() => {
+              const trimmedName = name.trim() || randomDefaultName();
+              // [DEFAULT — direct request: "when a client reloads the tab he should be
+              // reconnected"] Persisted BEFORE committing, so a reload even a moment after
+              // clicking "Join Room" (before the connection has fully opened) still has
+              // something to resume from.
+              saveJoinSession({ roomCode: trimmedCode, name: trimmedName, color });
+              setCommittedRoomCode(trimmedCode);
+              setScreen('join-room');
+            }}
+            className={BTN_PRIMARY}
+          >
+            Join Room
+          </button>
+          <button type="button" onClick={() => setScreen('menu')} className={BTN_GHOST}>
+            ← Back
+          </button>
         </div>
-        {nameColorFields}
-        <button
-          type="button"
-          disabled={!canJoin}
-          onClick={() => {
-            const trimmedName = name.trim() || randomDefaultName();
-            // [DEFAULT — direct request: "when a client reloads the tab he should be
-            // reconnected"] Persisted BEFORE committing, so a reload even a moment after
-            // clicking "Join Room" (before the connection has fully opened) still has
-            // something to resume from.
-            saveJoinSession({ roomCode: trimmedCode, name: trimmedName, color });
-            setCommittedRoomCode(trimmedCode);
-            setScreen('join-room');
-          }}
-          className={BTN_PRIMARY}
-        >
-          Join Room
-        </button>
-        <button type="button" onClick={() => setScreen('menu')} className={BTN_GHOST}>
-          ← Back
-        </button>
-      </div>
+      </CenteredScreen>
     );
   }
 
