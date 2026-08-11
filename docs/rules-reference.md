@@ -1304,22 +1304,29 @@ for the round each building unlocks.
 
 | Tile Type | Building | Effect | Cost |
 |---|---|---|---|
-| Forest | Sawmill | +1 Wood/turn; not before Round 3 § | 2 Wood + 1 Stone |
-| Forest | Hunting Lodge | +1 Food/turn; hero gains +1 XP on first hunt each round; not before Round 5 § | 2 Wood + 1 Food |
-| Hills | Quarry | +1 Stone/turn; not before Round 4 §; upgradable through tier 3 to +3/turn (§7.1a) † | 2 Stone + 1 Wood |
-| Plains | Farm | +1 Food/turn; not before Round 4 §; upgradable through tier 3 to +3/turn (§7.1a) † | 2 Food + 1 Wood |
-| Plains | Windmill (requires Farm built first) | Converts 2 Food into 1 Gold/turn; not before Round 6 § | 2 Stone + 2 Wood |
-| Plains | Cow Stable ‡ | +1 Meat/turn at tier 1 (feeds Soldier Upkeep, §6.3a); upgradable through tier 5 to +5/turn (§7.1a) † | 3 Food + 2 Wood |
-| Mountain | Mine | +1 Ore/turn; not before Round 3 § | 2 Ore + 1 Stone |
+| Forest | Sawmill | +1 Wood/turn; not before Round 3 § | 5 Wood + 3 Stone ✦ |
+| Forest | Hunting Lodge | +1 Food/turn; hero gains +1 XP on first hunt each round; not before Round 5 § | 4 Wood + 2 Food ✦ |
+| Hills | Quarry | +1 Stone/turn; not before Round 4 §; upgradable through tier 3 to +3/turn (§7.1a) † | 5 Stone + 3 Wood ✦ |
+| Plains | Farm | +1 Food/turn; not before Round 4 §; upgradable through tier 3 to +3/turn (§7.1a) † | 4 Food + 2 Wood ✦ |
+| Plains | Windmill (requires Farm built first) | Converts 2 Food into 1 Gold/turn; not before Round 6 § | 4 Stone + 3 Wood ✦ |
+| Plains | Cow Stable ‡ | +1 Meat/turn at tier 1 (feeds Soldier Upkeep, §6.3a); upgradable through tier 5 to +5/turn (§7.1a) † | 5 Food + 3 Wood ✦ |
+| Mountain | Mine | +1 Ore/turn; not before Round 3 § | 5 Ore + 3 Stone ✦ |
 | Mountain | Smithy | Crafts hero gear from Ore + Gold via `CraftGear` (§7.1c) — real as of balance rework pass 4; not before Round 5 § | 3 Ore + 2 Stone |
-| Desert | Trade Post | +1 Gold/turn; unlocks 2:1 bank trade instead of default 4:1; not before Round 3 § | 2 Gold + 2 Stone |
+| Desert | Trade Post | +1 Gold/turn; unlocks 2:1 bank trade instead of default 4:1; not before Round 3 § | 4 Gold + 3 Stone ✦ |
 | River | Dock | Unlocks boat movement; not before Round 3 §; produces no resource — see §6.3b for what a River tile is actually worth ¤ | 2 Wood + 1 Stone |
 | Any owned tile | Watchtower | +1 to each defending die (cap 6) in territory combat, for whoever is holding the tile (§6.3); upgradable through tier 3 to +3 (cap 8) (§7.1a) ** | 2 Stone + 2 Ore |
 | Plains only ‡ | Barracks | **Unlocks Soldier recruitment, and nothing else.** Recruits `max(1, floor(ownedTiles / tilesPerSoldier))` Soldiers/round into its own tile (capped at its tier's reserve cap) and only while the current army's upkeep is affordable (§6.3); move them out with Deploy Soldiers (interior) or Move Soldiers (the frontier). Confers **no** attack privilege and no adjacency rule ¶; upgradable through tier 3 for a bigger reserve and faster recruiting (§7.1a) ** | 3 Wood + 2 Ore + 5 Food ‡ |
 | Starting tile only | Capital upgrade (the Town) | Increases hero max HP every tier — tier 1 is free, granted at spawn; 6 tiers total as of balance rework pass 4 (tier 6, "the Grand Bazaar," is a late-game wonder capstone); see §7.3 | Cost scales with tier |
 
+✦ **[DEFAULT — balance rework pass 5, direct request: "make buildings more expensive .. e.g. a
+sawmill .. auto collecting of resources is way too OP for early game"]** Every basic production
+building's tier-1 cost roughly doubled — Smithy, Dock, Watchtower, and Barracks (already priced as
+its own gate, per § below) are unchanged. See `engine/constants.ts`'s Building Cost Table for the
+exact before/after on each.
+
 **Roads** are not in this table because they are not buildings — they sit on a tile *edge*, not on a
-tile, cost a flat 1 Wood, and are not a Phase-5 action. See §7.7.
+tile. **[DEFAULT — balance rework pass 5]** Cost raised from a flat 1 Wood to 2 Wood + 1 Stone, and
+roads now additionally require Capital Tier 2 — see §7.7 for the full changelog note.
 
 † **[DEFAULT — balance rework]** Round gate and upgrade track are new; the +1/turn base rate itself
 is unchanged from the original table for Farm and Quarry. **[DEFAULT — balance rework pass 2]** The
@@ -1608,13 +1615,26 @@ Model §1), so a border can carry **at most one road, ever, belonging to exactly
 lays it first owns that edge, and nobody can lay a second road there or take it over.
 
 ```
-BuildRoad(from, to)      # cost ROAD_COST = 1 Wood
+BuildRoad(from, to)      # cost ROAD_COST = 2 Wood + 1 Stone; requires Capital Tier >= ROAD_MIN_CAPITAL_TIER (2)
 ```
 
-- **Cost: 1 Wood per segment.** Deliberately cheap — roads are meant to be spammed outward from the
-  Capital into a network, and the interesting decision is *where the network reaches*, not whether
-  the next segment is affordable. (The Mage's −1-per-resource discount floors at 1, §7.2, so a Mage
-  also pays 1 Wood.)
+> **Changelog — balance rework pass 5 (post-launch, supersedes this section's cost/gate figures
+> wherever they conflict):** direct feedback that roads made the road-connected auto-collect sweep
+> below available too early — a player could afford ROAD_COST almost immediately, well before the
+> hero-carries-it-home economy this whole subsystem exists to relieve (see "Why roads exist" above)
+> had done any real work, so the hands-off income arrived before the manual economy ever got to
+> matter. Two changes: (1) **ROAD_COST raised 1 Wood → 2 Wood + 1 Stone**; (2) **roads now require
+> Capital Tier 2** (`ROAD_MIN_CAPITAL_TIER`, `engine/constants.ts`) — enforced in
+> `applyBuildRoad` (`engine/reducers.ts`). No roads can exist at all before Tier 2, so there is
+> nothing for the auto-collect sweep to run on yet; every early resource has to be carried home by
+> hand, exactly as the pre-roads economy intended. Building costs across the early production tier
+> (Sawmill, Quarry, Farm, Mine, TradePost, HuntingLodge, CowStable, Windmill — §7.1) were raised
+> alongside this, same direct feedback ("make buildings more expensive .. e.g. a sawmill").
+
+- **Cost: 2 Wood + 1 Stone per segment.** [DEFAULT — balance rework pass 5] Raised from a flat 1
+  Wood — see the changelog note above for why. (The Mage's −1-per-resource discount floors at 1 per
+  resource, §7.2.)
+- **Requires Capital Tier 2 or higher** (§7.3) — see the changelog note above.
 - **A free action, and NOT phase-gated at all.** Unlike Deploy/Move Soldiers, which are Phase 5, a
   road may be laid at any point during the player's own turn, and any number of segments may be laid
   in one turn if they can all be paid for. Making road-building compete with constructing a building

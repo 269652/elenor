@@ -256,11 +256,24 @@ export function soldierUpkeepUnits(soldierCount: number): number {
   return Math.ceil(soldierCount / SOLDIER_UPKEEP_GROUP_SIZE) * SOLDIER_UPKEEP_FOOD_PER_GROUP;
 }
 
-// ── Roads [DEFAULT — balance rework pass 3] ─────────────────────────────────────────────────
-/** One road segment along one tile edge. Deliberately cheap: roads are meant to be spammed
- *  outward from the Capital into a supply network, and the interesting decision is WHERE the
- *  network reaches, not whether you can afford the next segment. */
-export const ROAD_COST: ResourceCost = { Wood: 1 };
+// ── Roads [DEFAULT — balance rework pass 5, direct request: "make buildings more expensive as
+// well as streets .. gate streets behind a city upgrade .. before that the hero must gather
+// resources manually"] ───────────────────────────────────────────────────────────────────────
+/** One road segment along one tile edge. [DEFAULT — balance rework pass 5] Was a flat Wood:1 —
+ *  cheap enough to spam outward from turn one, which combined with ZERO gate on when a road
+ *  network could exist meant the road-connected auto-collect sweep (reducers.ts's
+ *  collectRoadConnectedTiles, fired automatically every round via RoadSupplyCollected) started
+ *  paying out before the manual walk-and-Gather economy (§2b) ever got a chance to matter — the
+ *  hero's own labor was optional almost immediately. Raised AND — the actual fix for "optional
+ *  almost immediately" — gated behind Capital Tier 2 (see applyBuildRoad's own capitalTier check
+ *  in reducers.ts): no roads exist at all before that, so there is nothing for the sweep to run
+ *  on, and every early resource has to be carried home by hand. */
+export const ROAD_COST: ResourceCost = { Wood: 2, Stone: 1 };
+/** [DEFAULT — balance rework pass 5, direct request: "gate streets behind a city upgrade .. so
+ *  after City Tier 2 streets get unlocked"] Enforced in reducers.ts's applyBuildRoad — kept here,
+ *  next to ROAD_COST, so the road system's whole gate (cost AND unlock round) reads as one unit
+ *  rather than a constant here and a bare literal buried in the reducer. */
+export const ROAD_MIN_CAPITAL_TIER = 2;
 
 // ── §7.3 Town (Capital) Tiers [DEFAULT — territory rework: 2 tiers -> 5, tier 1 now free] ──────
 /** [DEFAULT] Every player's starting tile is special: it carries a Town from turn one, not an
@@ -444,7 +457,11 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     // 900-1500+ net surplus in every one of four full measured games (one player finished with 11
     // Sawmills). Raised, not capped — a real diminishing-returns or per-player-limit mechanic
     // would be a bigger, separate change; this at least slows how fast the surplus compounds.
-    cost: { Wood: 3, Stone: 2 },
+    // [DEFAULT — balance rework pass 5, direct request: "make buildings more expensive .. e.g. a
+    // sawmill .. auto collecting of resources is way too OP for early game"] Raised again,
+    // Wood:3/Stone:2 -> Wood:5/Stone:3 — a first Sawmill should cost a genuinely uncomfortable
+    // chunk of an early wallet, not a trivial one-Gather-trip purchase.
+    cost: { Wood: 5, Stone: 3 },
     producesResource: 'Wood',
     produceAmount: 1,
     minRound: 3, // basic single-resource producer
@@ -453,7 +470,9 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   HuntingLodge: {
     type: 'HuntingLodge',
     allowedTileTypes: ['Forest'],
-    cost: { Wood: 2, Food: 1 },
+    // [DEFAULT — balance rework pass 5, direct request: "make buildings more expensive"] Was
+    // Wood:2/Food:1 — doubled alongside every other early producer, see Sawmill's identical note.
+    cost: { Wood: 4, Food: 2 },
     producesResource: 'Food',
     produceAmount: 1,
     // Later than the plain producers: it pays Food AND feeds the hero XP engine, so having it
@@ -467,33 +486,44 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     // [DEFAULT — bugfix/balance, see Sawmill's identical note] Was Stone:2/Wood:1 — Stone showed
     // the same 600-750+ net surplus pattern across every measured game (one player built 7 of
     // these on top of 2 upgraded tiers each).
-    cost: { Stone: 3, Wood: 2 },
+    // [DEFAULT — balance rework pass 5, see Sawmill's identical pass-5 note] Stone:3/Wood:2 ->
+    // Stone:5/Wood:3.
+    cost: { Stone: 5, Wood: 3 },
     producesResource: 'Stone',
     produceAmount: 1,
     minRound: 4, // [DEFAULT — balance rework] see BuildingDefinition.minRound doc comment
+    // [DEFAULT — balance rework pass 5] Upgrade costs raised alongside the base cost above — the
+    // old tier-2 cost (Stone:4/Ore:2 = 6) fell BELOW the new base cost (8), which would have made
+    // upgrading cheaper than the original build (engine/__tests__/balanceRework.test.ts enforces
+    // this invariant: every tier must cost at least as much as the one below it).
     upgrades: [
-      { cost: { Stone: 4, Ore: 2 }, produceAmount: 2 },
-      { cost: { Stone: 6, Ore: 4 }, produceAmount: 3 },
+      { cost: { Stone: 6, Ore: 3 }, produceAmount: 2 },
+      { cost: { Stone: 9, Ore: 5 }, produceAmount: 3 },
     ],
     effectDescription: '+1 Stone/turn (Ashland: half rate); round 4+; upgradable to +3/turn',
   },
   Farm: {
     type: 'Farm',
     allowedTileTypes: ['Plains'],
-    cost: { Food: 2, Wood: 1 },
+    // [DEFAULT — balance rework pass 5, see Sawmill's identical pass-5 note] Was Food:2/Wood:1 —
+    // doubled.
+    cost: { Food: 4, Wood: 2 },
     producesResource: 'Food',
     produceAmount: 1,
     minRound: 4, // [DEFAULT — balance rework] see BuildingDefinition.minRound doc comment
+    // [DEFAULT — balance rework pass 5] Upgrade costs raised alongside the base cost above — see
+    // Quarry's identical pass-5 note for why.
     upgrades: [
-      { cost: { Food: 4, Wood: 2 }, produceAmount: 2 },
-      { cost: { Food: 6, Wood: 4 }, produceAmount: 3 },
+      { cost: { Food: 5, Wood: 3 }, produceAmount: 2 },
+      { cost: { Food: 8, Wood: 5 }, produceAmount: 3 },
     ],
     effectDescription: '+1 Food/turn; round 4+; upgradable to +3/turn',
   },
   Windmill: {
     type: 'Windmill',
     allowedTileTypes: ['Plains'],
-    cost: { Stone: 2, Wood: 2 },
+    // [DEFAULT — balance rework pass 5, see Sawmill's identical pass-5 note] Was Stone:2/Wood:2.
+    cost: { Stone: 4, Wood: 3 },
     requiresBuilding: 'Farm',
     minRound: 6, // second-order building — Farm (round 4+) has to exist and pay out first
     effectDescription: 'Converts 2 Food into 1 Gold/turn; round 6+',
@@ -503,7 +533,9 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     allowedTileTypes: ['Mountain'],
     // [DEFAULT — bugfix/balance, see Sawmill's identical note] Was Ore:2/Stone:1 — Ore surplus
     // ranged 700-1000+ across every measured game (one player finished with 9 unupgraded Mines).
-    cost: { Ore: 3, Stone: 2 },
+    // [DEFAULT — balance rework pass 5, see Sawmill's identical pass-5 note] Ore:3/Stone:2 ->
+    // Ore:5/Stone:3.
+    cost: { Ore: 5, Stone: 3 },
     producesResource: 'Ore',
     produceAmount: 1,
     minRound: 3, // basic single-resource producer
@@ -521,7 +553,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   TradePost: {
     type: 'TradePost',
     allowedTileTypes: ['Desert'],
-    cost: { Gold: 2, Stone: 2 },
+    // [DEFAULT — balance rework pass 5, see Sawmill's identical pass-5 note] Was Gold:2/Stone:2.
+    cost: { Gold: 4, Stone: 3 },
     producesResource: 'Gold',
     produceAmount: 1,
     minRound: 3, // basic single-resource producer
@@ -566,18 +599,24 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   CowStable: {
     type: 'CowStable',
     allowedTileTypes: ['Plains'], // [DEFAULT — balance rework, new building]
-    cost: { Food: 3, Wood: 2 },
+    // [DEFAULT — balance rework pass 5, see Sawmill's identical pass-5 note] Was Food:3/Wood:2.
+    cost: { Food: 5, Wood: 3 },
     producesResource: 'Meat',
     // [DEFAULT — balance rework] Starts at 1/turn and climbs to 5 across four upgrades (tiers
     // 1-5). Opening at 3 made a single cheap building cover a 9-Soldier army's upkeep outright,
     // so the whole upkeep economy was solved the moment you built one. Starting at 1 makes
     // feeding an army a sustained investment that scales alongside it.
     produceAmount: 1,
+    // [DEFAULT — balance rework pass 5] Upgrade costs raised alongside the base cost above — see
+    // Quarry's identical pass-5 note for why. Tier 2 deliberately still costs exactly the same as
+    // the base build (Food:5/Wood:3 = 8 either way) — CowStable is priced that way on purpose
+    // (same bill, double the output — see the test's own comment,
+    // engine/__tests__/balanceRework.test.ts), it's the tiers ABOVE that must strictly escalate.
     upgrades: [
-      { cost: { Food: 3, Wood: 2 }, produceAmount: 2 },
-      { cost: { Food: 4, Wood: 3 }, produceAmount: 3 },
-      { cost: { Food: 6, Wood: 4, Stone: 2 }, produceAmount: 4 },
-      { cost: { Food: 8, Wood: 6, Stone: 4 }, produceAmount: 5 },
+      { cost: { Food: 5, Wood: 3 }, produceAmount: 2 },
+      { cost: { Food: 6, Wood: 4 }, produceAmount: 3 },
+      { cost: { Food: 8, Wood: 5, Stone: 3 }, produceAmount: 4 },
+      { cost: { Food: 10, Wood: 7, Stone: 5 }, produceAmount: 5 },
     ],
     effectDescription: '+1 Meat/turn (feeds Soldier upkeep); upgradable through tier 5 to +5/turn',
   },

@@ -61,6 +61,7 @@ import {
   LOOT_SELL_TROOPS,
   MIN_SOLDIERS_LEFT_BEHIND,
   ROAD_COST,
+  ROAD_MIN_CAPITAL_TIER,
   SMITHY_CRAFT_COSTS,
   SOLDIER_UPKEEP_FOOD_PER_GROUP,
   SOLDIER_UPKEEP_GROUP_SIZE,
@@ -1310,6 +1311,17 @@ export function applyBuildRoad(state: GameState, action: BuildRoadAction): GameS
   if (state.roads[key]) throw new IllegalActionError('That edge already has a road');
 
   const player = findPlayer(state, action.actorId);
+  // [DEFAULT — balance rework pass 5, direct request: "gate streets behind a city upgrade .. so
+  // after City Tier 2 streets get unlocked.. before that the hero must gather resources
+  // manually"] Roads are what makes the road-connected auto-collect sweep
+  // (collectRoadConnectedTiles below, fired automatically every round) possible at all — with no
+  // gate, that hands-off income started as early as a player could scrape together ROAD_COST,
+  // well before the hero-carries-it-home economy (§2b) had done any real work. Capital Tier 2 is
+  // itself a genuine investment (CAPITAL_TIERS), so this reads as "prove you can run the early
+  // manual economy first," not an arbitrary flat round number.
+  if (player.capitalTier < ROAD_MIN_CAPITAL_TIER) {
+    throw new IllegalActionError(`Roads require Capital Tier ${ROAD_MIN_CAPITAL_TIER} (upgrade your Town first)`);
+  }
   const hero = resolveHero(player, action.heroId);
   const isMage = classDefFor(player).startingBonus.kind === 'Mage';
   const cost = isMage ? applyMageDiscount(ROAD_COST) : ROAD_COST;

@@ -33,6 +33,9 @@ const P2_CAPITAL: HexCoord = { q: 9, r: 9 };
 const P2_SECOND: HexCoord = { q: 10, r: 9 };
 
 const ROAD_WOOD = ROAD_COST.Wood ?? 0;
+// [DEFAULT — balance rework pass 5] ROAD_COST now spends Stone too (was Wood-only) — see this
+// constant's own comment in engine/constants.ts.
+const ROAD_STONE = ROAD_COST.Stone ?? 0;
 
 function fixtureState(players: Player[], tiles: Tile[], overrides: Partial<GameState> = {}): GameState {
   const map: Record<string, Tile> = {};
@@ -77,6 +80,13 @@ interface NetworkOptions {
   /** Tiles owned by p2 among p1's chain (an invader who took a mid-chain tile). */
   p2Owns?: HexCoord[];
   wood?: number;
+  /** [DEFAULT — balance rework pass 5] Defaults to a comfortable surplus (ROAD_COST's Stone leg
+   *  is now nonzero too) — pass this explicitly wherever a test cares about the exact leftover. */
+  stone?: number;
+  /** [DEFAULT — balance rework pass 5] p1's Capital tier — defaults to 2 (the road-building gate
+   *  itself, ROAD_MIN_CAPITAL_TIER) so this file's road-MECHANICS tests aren't also exercising
+   *  the gate; pass a lower value explicitly to test the gate itself. */
+  capitalTier?: number;
   roads?: Record<string, PlayerId>;
   stockpiles?: { coord: HexCoord; stockpile: Partial<ResourceBundle> }[];
   state?: Partial<GameState>;
@@ -99,7 +109,11 @@ function networkFixture(opts: NetworkOptions = {}) {
     id: 'p1',
     capitalTile: CAPITAL,
     ownedTiles: p1Owns,
-    resources: { Wood: opts.wood ?? ROAD_WOOD },
+    resources: { Wood: opts.wood ?? ROAD_WOOD, Stone: opts.stone ?? 5 },
+    // [DEFAULT — balance rework pass 5] Roads now require Capital Tier 2 (reducers.ts's
+    // applyBuildRoad) — this whole file is about road MECHANICS, not the new gate itself (that
+    // gets its own dedicated describe block below), so every fixture clears the gate by default.
+    capitalTier: opts.capitalTier ?? 2,
   });
   const p2 = makePlayer({
     id: 'p2',
@@ -186,14 +200,18 @@ describe('edgeKey', () => {
 
 describe('BuildRoad: happy path', () => {
   it('charges ROAD_COST, records the edge against the actor, and logs RoadBuilt', () => {
-    const state = networkFixture({ wood: ROAD_WOOD });
+    // [DEFAULT — balance rework pass 5] Both legs of ROAD_COST pinned to exactly what's owed —
+    // Wood via the wood: option, Stone via the stone: option — so the "nothing else was touched"
+    // loop below can still assert a clean 0 on both after payment.
+    const state = networkFixture({ wood: ROAD_WOOD, stone: ROAD_STONE });
     const after = applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A });
 
     expect(after.roads[edgeKey(CAPITAL, A)]).toBe('p1');
     expect(hasRoadBetween(after, 'p1', A, CAPITAL)).toBe(true);
     expect(playerIn(after, 'p1').resources.Wood).toBe(0);
+    expect(playerIn(after, 'p1').resources.Stone).toBe(0);
     for (const r of RESOURCE_TYPES) {
-      if (r === 'Wood') continue;
+      if (r === 'Wood' || r === 'Stone') continue;
       expect(playerIn(after, 'p1').resources[r]).toBe(0); // nothing else was touched
     }
     const built = eventsOfType(after, 'RoadBuilt');
@@ -250,6 +268,24 @@ describe('BuildRoad: rejections', () => {
     expect(() => applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A })).toThrow(IllegalActionError);
   });
 
+  it('rejects roads below Capital Tier 2, and allows them from Tier 2 on', () => {
+    // [DEFAULT — balance rework pass 5, direct request: "gate streets behind a city upgrade ..
+    // so after City Tier 2 streets get unlocked.. before that the hero must gather resources
+    // manually"] engine/constants.ts's ROAD_MIN_CAPITAL_TIER, enforced in
+    // engine/reducers.ts's applyBuildRoad.
+    for (const tier of [0, 1]) {
+      const state = networkFixture({ capitalTier: tier });
+      expect(() => applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A })).toThrow(
+        /Capital Tier 2/i
+      );
+    }
+    for (const tier of [2, 3]) {
+      const state = networkFixture({ capitalTier: tier });
+      const after = applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A });
+      expect(after.roads[edgeKey(CAPITAL, A)]).toBe('p1');
+    }
+  });
+
   it('rejects a road built out of turn', () => {
     const state = networkFixture({ wood: 5 });
     expect(() => applyAction(state, { type: 'BuildRoad', actorId: 'p2', from: P2_CAPITAL, to: P2_SECOND })).toThrow(/not p2's turn/i);
@@ -276,14 +312,17 @@ describe('BuildRoad: Build-phase only', () => {
 
 describe('BuildRoad does not consume the Build slot', () => {
   it('does not consume the one-build-per-turn slot, so a whole network can go up in one turn', () => {
-    const state = networkFixture({ wood: 5 });
+    // [DEFAULT — balance rework pass 5] Three segments now cost 3x ROAD_COST on BOTH legs — was
+    // affordable out of the fixture's old flat wood:5 default when ROAD_COST was Wood-only.
+    const state = networkFixture({ wood: 3 * ROAD_WOOD, stone: 3 * ROAD_STONE });
     let s = applyAction(state, { type: 'BuildRoad', actorId: 'p1', from: CAPITAL, to: A });
     expect(s.hasBuiltThisTurn).toBe(false);
     s = applyAction(s, { type: 'BuildRoad', actorId: 'p1', from: A, to: B });
     s = applyAction(s, { type: 'BuildRoad', actorId: 'p1', from: B, to: C });
     expect(s.hasBuiltThisTurn).toBe(false);
     expect(Object.keys(s.roads)).toHaveLength(3);
-    expect(playerIn(s, 'p1').resources.Wood).toBe(5 - 3 * ROAD_WOOD);
+    expect(playerIn(s, 'p1').resources.Wood).toBe(0);
+    expect(playerIn(s, 'p1').resources.Stone).toBe(0);
   });
 
   it('still works after the turn\'s Build action has been spent', () => {
