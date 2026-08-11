@@ -95,6 +95,13 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo): P2PJoinPhase {
                 gameStateRef.current = message.state;
                 setGameState(message.state);
                 setError(null);
+                // [BUG FIX — direct request: "when a client reloads the tab he should be
+                // reconnected"] A resumed joiner's fresh mount goes straight to the room screen
+                // with no preceding 'gameStarted' — the host's onJoinerConnected (use-p2p-host.ts)
+                // proactively sends stateSync, not gameStarted, once a game is already running.
+                // Without this, phase stayed stuck at 'connecting' forever even though gameState
+                // was already correctly populated above — the joiner looked permanently frozen.
+                setPhase((p) => (p === 'connecting' ? 'active' : p));
                 break;
               case 'reject':
                 // The optimistic apply that produced our current gameStateRef has now proven
@@ -128,9 +135,12 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo): P2PJoinPhase {
           return;
         }
         handleRef.current = handle;
-        // A reconnect mid-game has nothing to wait for — ask the host to catch us up immediately
-        // rather than sitting on possibly-stale state until the next unrelated broadcast.
-        if (gameStateRef.current) handle.sendToHost({ kind: 'requestSync' });
+        // Always ask for a sync right after connecting — covers a same-mount reconnect (had
+        // state, may have missed messages while disconnected) AND a fresh-mount resume from a
+        // persisted room code (never had state at all, so this is the ONLY thing that unsticks
+        // it if the host's own proactive onJoinerConnected push ever races or gets lost). A no-op
+        // on the host side if no game has started yet (see use-p2p-host.ts's requestSync handler).
+        handle.sendToHost({ kind: 'requestSync' });
       }, (err: Error) => {
         if (!cancelled) setFatal(err.message);
       });
