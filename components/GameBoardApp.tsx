@@ -81,6 +81,12 @@ interface GameBoardAppProps {
   /** Seats driven by ai/decideAction.ts instead of a human — see hooks/use-ai-turn.ts. Omit
    *  (or leave empty) for a game with no AI opponents; online mode doesn't wire this up yet. */
   aiPlayerIds?: ReadonlySet<PlayerId>;
+  /** [DEFAULT — direct request: "add exit game button somewhere"] Leaves the current game and
+   *  returns to whatever screen this mode considers "before the game" — clearing hotseat's
+   *  persisted localStorage session, closing a P2P peer connection and its persisted session, or
+   *  just navigating away, depending on which caller wires it up. Optional: online mode (and any
+   *  future mode) that doesn't have an "exit" concept yet simply omits it and no button renders. */
+  onExit?: () => void;
 }
 
 /** [DEFAULT — territory rework] What a MoveSoldiers march onto a given neighbour would actually
@@ -203,7 +209,7 @@ function IosSwitch({ checked, onChange, label }: { checked: boolean; onChange: (
   );
 }
 
-export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = NO_AI_PLAYERS }: GameBoardAppProps) {
+export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = NO_AI_PLAYERS, onExit }: GameBoardAppProps) {
   const [selectedCoord, setSelectedCoord] = useState<HexCoord | null>(null);
   const [pendingPath, setPendingPath] = useState<HexCoord[]>([]);
   /** Armed march: the tile whose garrison is about to walk somewhere, and how many of them. */
@@ -357,6 +363,17 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
           <p className="font-mono text-xs uppercase tracking-wide text-hx-ink-dim motion-safe:animate-fade-up motion-safe:[animation-delay:280ms]">
             Win condition: {state.winCondition ? WIN_CONDITION_LABEL[state.winCondition] : ''}
           </p>
+          {/* [DEFAULT — direct request: "add exit game button somewhere"] The game is already
+              over here, so no confirm needed — unlike the in-progress Exit button below. */}
+          {onExit && (
+            <button
+              type="button"
+              onClick={onExit}
+              className={clsx(BTN_SECONDARY, 'mt-2 motion-safe:animate-fade-up motion-safe:[animation-delay:400ms]')}
+            >
+              🚪 Exit to menu
+            </button>
+          )}
         </div>
       </>
     );
@@ -487,7 +504,33 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
 
       <div className="flex flex-col gap-3 overflow-y-auto">
         <div className={PANEL}>
-          <PhaseTracker state={state} />
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <PhaseTracker state={state} />
+            </div>
+            {/* [DEFAULT — direct request: "add exit game button somewhere"] A small, clearly
+                secondary icon-button rather than a full-width CTA — leaving mid-game is rare and
+                shouldn't compete for attention with the phase tracker it sits beside. Confirmed
+                via a plain window.confirm rather than a custom modal: this only ever discards
+                THIS device's own local/hosted session (hotseat's localStorage save, or a P2P
+                room this device is hosting/in), never anything sent elsewhere, so a lightweight
+                native confirm is proportionate. */}
+            {onExit && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('Exit this game? You can resume a hotseat game later, but a P2P room closes for everyone once the host leaves.')) {
+                    onExit();
+                  }
+                }}
+                title="Exit game"
+                aria-label="Exit game"
+                className="shrink-0 rounded-sm border border-hx-border px-2 py-1 text-xs text-hx-ink-faint transition hover:border-hx-blood/60 hover:text-hx-blood"
+              >
+                🚪 Exit
+              </button>
+            )}
+          </div>
         </div>
 
         {error && (

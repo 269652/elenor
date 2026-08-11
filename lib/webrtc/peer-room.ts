@@ -69,17 +69,30 @@ export interface HostRoomHandlers {
   onFatalError: (message: string) => void;
 }
 
+/** How many times to retry the EXACT SAME room code on an `unavailable-id` collision before
+ *  giving up on it and falling back to a fresh one. [DEFAULT — direct request: "if the host
+ *  reloads the tab it should be restored .. and let the clients reconnect"] A host reload
+ *  destroys the old Peer object client-side, but the PeerJS broker (0.peerjs.com) doesn't
+ *  necessarily notice the old connection is gone instantly — a fast reload reopening the SAME
+ *  code can transiently collide with its own, now-dead, prior session. Retrying the same code
+ *  short-term lets that resolve itself; immediately falling back to a random new code (the old
+ *  behavior) would silently abandon the room's address, stranding every client's own reconnect
+ *  loop (hooks/use-p2p-join.ts) retrying a code the host is no longer listening on.
+ *  SAME_CODE_RETRY_DELAY_MS below is the gap between each attempt. */
+const SAME_CODE_RETRY_ATTEMPTS = 4;
+const SAME_CODE_RETRY_DELAY_MS = 750;
+
 /** Opens this device as the host of `roomCode` — creates a Peer whose id IS the room code (see
  *  protocol.ts's roomCodeToPeerId) so joiners can dial straight in with nothing but the code.
- *  Retries once with a freshly generated code on an id collision (astronomically unlikely at a
- *  5-char/32-symbol code, but cheap to handle) — resolves with whatever code actually won, which
- *  may differ from the one passed in; callers should always display the RESOLVED code, not the
- *  one they asked for. */
+ *  On an id collision, retries the SAME code up to SAME_CODE_RETRY_ATTEMPTS times (see its own
+ *  comment) before falling back once to a freshly generated code (astronomically unlikely to
+ *  ALSO collide) — resolves with whatever code actually won, which may differ from the one
+ *  passed in; callers should always display the RESOLVED code, not the one they asked for. */
 export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers): Promise<PeerRoomHandle & { roomCode: string }> {
   const PeerCtor = await loadPeerJs();
   const connections = new Map<string, DataConnection>();
 
-  async function open(code: string, isRetry: boolean): Promise<{ peer: Peer; roomCode: string }> {
+  async function open(code: string, sameCodeAttemptsLeft: number): Promise<{ peer: Peer; roomCode: string }> {
     return new Promise((resolve, reject) => {
       const peer = new PeerCtor(roomCodeToPeerId(code));
       const onOpen = () => {
@@ -89,10 +102,14 @@ export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers
       const onError = (err: PeerError<`${PeerErrorType}`>) => {
         peer.off('open', onOpen);
         peer.destroy();
-        if (err.type === 'unavailable-id' && !isRetry) {
-          open(generateRoomCode(), true).then(resolve, reject);
-        } else {
+        if (err.type !== 'unavailable-id') {
           reject(new Error(friendlyPeerError(err)));
+          return;
+        }
+        if (sameCodeAttemptsLeft > 0) {
+          setTimeout(() => open(code, sameCodeAttemptsLeft - 1).then(resolve, reject), SAME_CODE_RETRY_DELAY_MS);
+        } else {
+          open(generateRoomCode(), 0).then(resolve, reject);
         }
       };
       peer.once('open', onOpen);
@@ -100,7 +117,7 @@ export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers
     });
   }
 
-  const { peer, roomCode: resolvedCode } = await open(roomCode, false);
+  const { peer, roomCode: resolvedCode } = await open(roomCode, SAME_CODE_RETRY_ATTEMPTS);
 
   peer.on('connection', (conn) => {
     conn.on('open', () => {

@@ -15,6 +15,7 @@ import { BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/component
 import { useP2PHost, type P2PHostPhase } from '@/hooks/use-p2p-host';
 import { useP2PJoin, type P2PJoinPhase } from '@/hooks/use-p2p-join';
 import { isPlausibleRoomCode, normalizeRoomCode, type LobbyPlayerInfo } from '@/lib/webrtc/protocol';
+import { clearHostSession, clearJoinSession, loadHostSession, loadJoinSession, saveJoinSession } from '@/lib/webrtc/persistence';
 
 const PALETTE = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316'];
 const DEFAULT_NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank'];
@@ -102,7 +103,7 @@ function ShareRoomCode({ roomCode }: { roomCode: string }) {
 
 // ── Host ─────────────────────────────────────────────────────────────────────────────────────
 
-function HostLobby({ hostState }: { hostState: Extract<P2PHostPhase, { phase: 'lobby' }> }) {
+function HostLobby({ hostState, onLeave }: { hostState: Extract<P2PHostPhase, { phase: 'lobby' }>; onLeave: () => void }) {
   return (
     <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-4`}>
       <div className="flex flex-col gap-1">
@@ -117,23 +118,41 @@ function HostLobby({ hostState }: { hostState: Extract<P2PHostPhase, { phase: 'l
       <button type="button" disabled={!hostState.canStart} onClick={hostState.startGame} className={BTN_PRIMARY}>
         {hostState.canStart ? '▶ Start Game' : `Need at least 2 players (have ${hostState.players.length})`}
       </button>
+      {/* [DEFAULT — direct request: "add exit game button somewhere"] Closing this room (not
+          just backing out of the setup form) is what actually needs to clear the persisted
+          session — see onLeave, wired to clearHostSession in P2PApp. */}
+      <button type="button" onClick={onLeave} className={BTN_GHOST}>
+        ✖ Close room
+      </button>
     </div>
   );
 }
 
-function P2PHostRoom({ name, color, onBack }: { name: string; color: string; onBack: () => void }) {
+function P2PHostRoom({ name, color, onBack, onLeave }: { name: string; color: string; onBack: () => void; onLeave: () => void }) {
   const hostInfo = useMemo(() => ({ name, color }), [name, color]);
   const result = useP2PHost(hostInfo);
 
   if (result.phase === 'connecting') return <ConnectingScreen label="Opening a room…" />;
   if (result.phase === 'error') return <ErrorScreen message={result.message} onBack={onBack} />;
-  if (result.phase === 'lobby') return <HostLobby hostState={result} />;
-  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} />;
+  if (result.phase === 'lobby') return <HostLobby hostState={result} onLeave={onLeave} />;
+  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} />;
 }
 
 // ── Join ─────────────────────────────────────────────────────────────────────────────────────
 
-function P2PJoinRoom({ roomCode, name, color, onBack }: { roomCode: string; name: string; color: string; onBack: () => void }) {
+function P2PJoinRoom({
+  roomCode,
+  name,
+  color,
+  onBack,
+  onLeave,
+}: {
+  roomCode: string;
+  name: string;
+  color: string;
+  onBack: () => void;
+  onLeave: () => void;
+}) {
   const myInfo = useMemo(() => ({ name, color }), [name, color]);
   const result: P2PJoinPhase = useP2PJoin(roomCode, myInfo);
 
@@ -147,10 +166,13 @@ function P2PJoinRoom({ roomCode, name, color, onBack }: { roomCode: string; name
           <p className="text-sm text-hx-ink-dim">Waiting for the host to start the game…</p>
         </div>
         <LobbyRoster players={result.players} />
+        <button type="button" onClick={onLeave} className={BTN_GHOST}>
+          ✖ Leave room
+        </button>
       </div>
     );
   }
-  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} />;
+  return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} />;
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────────────────────────
@@ -158,11 +180,59 @@ function P2PJoinRoom({ roomCode, name, color, onBack }: { roomCode: string; name
 type Screen = 'menu' | 'host-setup' | 'host-room' | 'join-setup' | 'join-room';
 
 export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; onExit: () => void }) {
-  const [screen, setScreen] = useState<Screen>(initialRoomCode ? 'join-setup' : 'menu');
-  const [name, setName] = useState(randomDefaultName);
-  const [color, setColor] = useState(PALETTE[0]);
-  const [roomCodeInput, setRoomCodeInput] = useState(initialRoomCode ?? '');
-  const [committedRoomCode, setCommittedRoomCode] = useState('');
+  // [DEFAULT — direct request: "when a client reloads the tab he should be reconnected .. if
+  // the host reloads the tab it should be restored after reload and let the clients reconnect"]
+  // Read once, at mount — governs which screen this component STARTS on, so a reload jumps
+  // straight back into an in-progress room instead of the menu/setup screens. Host takes
+  // priority if somehow both exist (shouldn't happen in normal use, but a device can't
+  // meaningfully be both at once, and "I was hosting" is the more consequential state to lose).
+  //
+  // Only resumes when there's no URL room code, OR the URL's room code matches the persisted
+  // session's — a link to a DIFFERENT room (someone else's invite, opened in a tab that still
+  // has an old session sitting in sessionStorage) should go to that room's join-setup screen,
+  // not silently hijack it back into the stale one.
+  const [resumedHost] = useState(() => {
+    const s = loadHostSession();
+    if (!s) return null;
+    if (initialRoomCode && normalizeRoomCode(initialRoomCode) !== s.roomCode) return null;
+    return s;
+  });
+  const [resumedJoin] = useState(() => {
+    if (resumedHost) return null;
+    const s = loadJoinSession();
+    if (!s) return null;
+    if (initialRoomCode && normalizeRoomCode(initialRoomCode) !== s.roomCode) return null;
+    return s;
+  });
+
+  const [screen, setScreen] = useState<Screen>(() => {
+    if (resumedHost) return 'host-room';
+    if (resumedJoin) return 'join-room';
+    return initialRoomCode ? 'join-setup' : 'menu';
+  });
+  const [name, setName] = useState(() => resumedHost?.name ?? resumedJoin?.name ?? randomDefaultName());
+  const [color, setColor] = useState(() => resumedHost?.color ?? resumedJoin?.color ?? PALETTE[0]);
+  const [roomCodeInput, setRoomCodeInput] = useState(resumedJoin?.roomCode ?? initialRoomCode ?? '');
+  const [committedRoomCode, setCommittedRoomCode] = useState(resumedJoin?.roomCode ?? '');
+
+  /** The top-level "leave P2P entirely" exit (landing page's Back / the shareable-link page's
+   *  router.push('/')) should never leave a stale session behind for a LATER visit to silently
+   *  auto-resume into — clear both defensively, harmless if neither existed. */
+  function exitP2P() {
+    clearHostSession();
+    clearJoinSession();
+    onExit();
+  }
+
+  function leaveHostRoom() {
+    clearHostSession();
+    setScreen('menu');
+  }
+
+  function leaveJoinRoom() {
+    clearJoinSession();
+    setScreen('menu');
+  }
 
   const nameColorFields = (
     <>
@@ -204,7 +274,7 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
         <button type="button" onClick={() => setScreen('join-setup')} className={BTN_SECONDARY}>
           🚪 Join a room
         </button>
-        <button type="button" onClick={onExit} className={BTN_GHOST}>
+        <button type="button" onClick={exitP2P} className={BTN_GHOST}>
           ← Back
         </button>
       </div>
@@ -227,7 +297,10 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
   }
 
   if (screen === 'host-room') {
-    return <P2PHostRoom name={name.trim() || randomDefaultName()} color={color} onBack={() => setScreen('menu')} />;
+    // onBack only ever fires from the error screen — reusing leaveHostRoom there too so a
+    // genuinely dead room (couldn't reopen its code, fatal signaling error) doesn't leave a
+    // stale session behind that the NEXT reload would just try to resume into again.
+    return <P2PHostRoom name={name.trim() || randomDefaultName()} color={color} onBack={leaveHostRoom} onLeave={leaveHostRoom} />;
   }
 
   if (screen === 'join-setup') {
@@ -251,6 +324,12 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
           type="button"
           disabled={!canJoin}
           onClick={() => {
+            const trimmedName = name.trim() || randomDefaultName();
+            // [DEFAULT — direct request: "when a client reloads the tab he should be
+            // reconnected"] Persisted BEFORE committing, so a reload even a moment after
+            // clicking "Join Room" (before the connection has fully opened) still has
+            // something to resume from.
+            saveJoinSession({ roomCode: trimmedCode, name: trimmedName, color });
             setCommittedRoomCode(trimmedCode);
             setScreen('join-room');
           }}
@@ -266,5 +345,15 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
   }
 
   // screen === 'join-room'
-  return <P2PJoinRoom roomCode={committedRoomCode} name={name.trim() || randomDefaultName()} color={color} onBack={() => setScreen('menu')} />;
+  // onBack only ever fires from the error screen — reusing leaveJoinRoom there too, same
+  // reasoning as the host side above.
+  return (
+    <P2PJoinRoom
+      roomCode={committedRoomCode}
+      name={name.trim() || randomDefaultName()}
+      color={color}
+      onBack={leaveJoinRoom}
+      onLeave={leaveJoinRoom}
+    />
+  );
 }

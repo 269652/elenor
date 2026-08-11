@@ -7,11 +7,22 @@ import { P2PApp } from '@/components/p2p/P2PApp';
 import { createGameAction, joinGameAction } from '@/actions/game-actions';
 import { BTN_ARCANE, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 import { SCREEN_ART } from '@/components/screenArt';
+import { loadHotseatSession } from '@/lib/hotseatPersistence';
+import { loadHostSession, loadJoinSession } from '@/lib/webrtc/persistence';
 
 type Tab = 'menu' | 'local' | 'online' | 'p2p';
 
 export function LandingPage({ supabaseConfigured }: { supabaseConfigured: boolean }) {
-  const [tab, setTab] = useState<Tab>('menu');
+  // [DEFAULT — direct request: "it should rather directly reload into the open session"] A
+  // reload always remounts LandingPage fresh — without this check it would default to 'menu'
+  // and require an extra manual click back into hotseat/P2P before either mode's OWN resume
+  // logic (HotseatApp.tsx, components/p2p/P2PApp.tsx) ever got a chance to run. Checked once,
+  // here, so the very first render already knows which screen to land on.
+  const [tab, setTab] = useState<Tab>(() => {
+    if (loadHotseatSession()) return 'local';
+    if (loadHostSession() || loadJoinSession()) return 'p2p';
+    return 'menu';
+  });
 
   if (tab === 'local') return <HotseatApp />;
   if (tab === 'p2p') {

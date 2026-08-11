@@ -1,25 +1,58 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
-import { createGame, type PlayerId, type SetupPlayerInput } from '@/engine';
+import { createGame, type GameState, type PlayerId, type SetupPlayerInput } from '@/engine';
 import { useLocalGame } from '@/hooks/use-local-game';
 import { HotseatSetup, type HotseatPlayerSetup, type HotseatStartPayload } from '@/components/lobby/HotseatSetup';
 import { GameBoardApp } from '@/components/GameBoardApp';
 import { SCREEN_ART } from '@/components/screenArt';
+import { clearHotseatSession, loadHotseatSession, saveHotseatSession } from '@/lib/hotseatPersistence';
 
-function LocalGame({ players, aiPlayerIds }: { players: SetupPlayerInput[]; aiPlayerIds: ReadonlySet<PlayerId> }) {
-  const [initialState] = useState(() => createGame(`local-${Date.now()}`, players, `${Date.now()}-${Math.random()}`, 'hotseat'));
+function LocalGame({
+  players,
+  aiPlayerIds,
+  payload,
+  resumedState,
+  onExit,
+}: {
+  players: SetupPlayerInput[];
+  aiPlayerIds: ReadonlySet<PlayerId>;
+  payload: HotseatStartPayload;
+  /** Set only when THIS mount is resuming a persisted session — see HotseatApp's
+   *  `isResumedPayload` check. `LocalGame`'s own lazy useState initializer only ever reads this
+   *  once, on mount, which is exactly the semantics we want (a fresh game started later via
+   *  HotseatSetup gets its own fresh LocalGame mount with resumedState back to null). */
+  resumedState: GameState | null;
+  onExit: () => void;
+}) {
+  const [initialState] = useState(() => resumedState ?? createGame(`local-${Date.now()}`, players, `${Date.now()}-${Math.random()}`, 'hotseat'));
   const { state, dispatch, error } = useLocalGame(initialState);
   // Hotseat's "am I allowed to click things" question is really "is the seat on turn a human
   // one" — an AI seat plays itself via useAiTurn (inside GameBoardApp), so isMyTurn is false
   // for those turns even though there's no separate "online player identity" concept here.
   const isMyTurn = !aiPlayerIds.has(state.currentPlayerId);
-  return <GameBoardApp state={state} dispatch={dispatch} error={error} isMyTurn={isMyTurn} aiPlayerIds={aiPlayerIds} />;
+
+  // [DEFAULT — direct request: "sessions are persisted in localstorage so that the game
+  // continues where left off when you reload the tab"] Every state change (production, a tile
+  // placed, a build, a whole turn) re-saves — cheap relative to a click, and means "reload right
+  // now" never loses more than the in-flight click itself.
+  useEffect(() => {
+    saveHotseatSession({ payload, state });
+  }, [payload, state]);
+
+  return (
+    <GameBoardApp state={state} dispatch={dispatch} error={error} isMyTurn={isMyTurn} aiPlayerIds={aiPlayerIds} onExit={onExit} />
+  );
 }
 
 export function HotseatApp() {
-  const [payload, setPayload] = useState<HotseatStartPayload | null>(null);
+  // Read once, at first mount — HotseatSetup.onStart below always hands `payload` a BRAND NEW
+  // object, so `payload === session?.payload` (checked below) stays a reliable "is this render
+  // still showing the resumed game, or has the player since started a fresh one" test without
+  // needing a separate ref/flag.
+  const [session] = useState(() => loadHotseatSession());
+  const [payload, setPayload] = useState<HotseatStartPayload | null>(session?.payload ?? null);
 
   const players = useMemo<SetupPlayerInput[] | null>(
     () => payload?.players?.map((p) => ({ id: p.id, name: p.name, color: p.color, classId: p.classId })) ?? null,
@@ -29,6 +62,11 @@ export function HotseatApp() {
     () => new Set((payload?.players ?? []).filter((p) => p.isAI).map((p) => p.id)),
     [payload]
   );
+
+  function handleExit() {
+    clearHotseatSession();
+    setPayload(null);
+  }
 
   if (!payload || !players) {
     return (
@@ -64,5 +102,13 @@ export function HotseatApp() {
     );
   }
 
-  return <LocalGame players={players} aiPlayerIds={aiPlayerIds} />;
+  return (
+    <LocalGame
+      players={players}
+      aiPlayerIds={aiPlayerIds}
+      payload={payload}
+      resumedState={payload === session?.payload ? (session?.state ?? null) : null}
+      onExit={handleExit}
+    />
+  );
 }

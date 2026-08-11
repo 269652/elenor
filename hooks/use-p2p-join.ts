@@ -25,8 +25,15 @@ interface JoinInfo {
   color: string;
 }
 
-const RECONNECT_ATTEMPTS = 5;
-const RECONNECT_DELAY_MS = 2000;
+// [DEFAULT — direct request: "if the host reloads the tab it should be restored .. and let the
+// clients reconnect"] A host reload now takes a bit longer to come back up than a plain dropped
+// connection — it has to re-run its own connect effect AND (see peer-room.ts's
+// SAME_CODE_RETRY_ATTEMPTS/SAME_CODE_RETRY_DELAY_MS) potentially wait out a few retries to
+// reclaim its old room code from the signaling broker. Widened from 5×2s (10s total) to 8×2.5s
+// (20s total) so a joiner's own retry loop doesn't give up before the host has had a realistic
+// chance to come back.
+const RECONNECT_ATTEMPTS = 8;
+const RECONNECT_DELAY_MS = 2500;
 
 /** Same human rejoining the same room (a dropped connection, or an accidental page refresh)
  *  should come back as the SAME in-game player, not a fresh seat — see use-p2p-host.ts's
