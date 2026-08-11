@@ -25,4 +25,11 @@ export interface P2PRoomContext {
   unreadChatCount: number;
   sendChat: (text: string) => void;
   markChatRead: () => void;
+  voiceEnabled: boolean;
+  voiceMuted: boolean;
+  voiceError: string | null;
+  remoteVoiceStreams: { playerId: PlayerId; name: string; color: string; stream: MediaStream }[];
+  enableVoice: () => Promise<void>;
+  disableVoice: () => void;
+  toggleVoiceMuted: () => void;
 }

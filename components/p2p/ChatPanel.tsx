@@ -17,8 +17,10 @@ import type { P2PRoomContext } from './types';
 export function ChatPanel({ ctx }: { ctx: P2PRoomContext }) {
   const [draft, setDraft] = useState('');
   const [mutedPlayerIds, setMutedPlayerIds] = useState<ReadonlySet<string>>(new Set());
+  const [mutedVoicePlayerIds, setMutedVoicePlayerIds] = useState<ReadonlySet<string>>(new Set());
   const [chatMuted, setChatMuted] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const audioRefs = useRef(new Map<string, HTMLAudioElement>());
 
   // Resets the badge for as long as this panel stays mounted (i.e. the Chat tab is the one
   // selected) — re-firing on every ctx identity change is harmless (setUnreadChatCount(0) when
@@ -31,6 +33,16 @@ export function ChatPanel({ ctx }: { ctx: P2PRoomContext }) {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [ctx.chatMessages.length]);
+
+  useEffect(() => {
+    const streamIds = new Set(ctx.remoteVoiceStreams.map((s) => s.playerId));
+    for (const [playerId, el] of audioRefs.current.entries()) {
+      if (!streamIds.has(playerId)) {
+        el.srcObject = null;
+        audioRefs.current.delete(playerId);
+      }
+    }
+  }, [ctx.remoteVoiceStreams]);
 
   function toggleMutePlayer(playerId: string) {
     setMutedPlayerIds((prev) => {
@@ -48,6 +60,15 @@ export function ChatPanel({ ctx }: { ctx: P2PRoomContext }) {
     setDraft('');
   }
 
+  function toggleMuteVoicePlayer(playerId: string) {
+    setMutedVoicePlayerIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(playerId)) next.delete(playerId);
+      else next.add(playerId);
+      return next;
+    });
+  }
+
   const visibleMessages = chatMuted ? [] : ctx.chatMessages.filter((m) => !mutedPlayerIds.has(m.playerId));
   const otherPlayers = ctx.players.filter((p) => p.playerId !== ctx.myPlayerId);
 
@@ -55,14 +76,73 @@ export function ChatPanel({ ctx }: { ctx: P2PRoomContext }) {
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Room chat</span>
-        <button
-          type="button"
-          onClick={() => setChatMuted((v) => !v)}
-          className="rounded-sm border border-hx-border px-2 py-0.5 text-[10px] text-hx-ink-faint transition hover:text-hx-ink"
-        >
-          {chatMuted ? '🔇 Unmute chat' : '🔊 Mute chat'}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setChatMuted((v) => !v)}
+            className="rounded-sm border border-hx-border px-2 py-0.5 text-[10px] text-hx-ink-faint transition hover:text-hx-ink"
+          >
+            {chatMuted ? '🔇 Unmute chat' : '🔊 Mute chat'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (ctx.voiceEnabled) ctx.disableVoice();
+              else void ctx.enableVoice();
+            }}
+            className="rounded-sm border border-hx-border px-2 py-0.5 text-[10px] text-hx-ink-faint transition hover:text-hx-ink"
+          >
+            {ctx.voiceEnabled ? '🎤 Leave voice' : '🎙️ Join voice'}
+          </button>
+          <button
+            type="button"
+            disabled={!ctx.voiceEnabled}
+            onClick={ctx.toggleVoiceMuted}
+            className="rounded-sm border border-hx-border px-2 py-0.5 text-[10px] text-hx-ink-faint transition hover:text-hx-ink disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {ctx.voiceMuted ? '🔈 Unmute mic' : '🔇 Mute mic'}
+          </button>
+        </div>
       </div>
+
+      {ctx.voiceError && <p className="text-xs text-hx-blood">⚠️ {ctx.voiceError}</p>}
+
+      {ctx.voiceEnabled && (
+        <div className="rounded-sm border border-hx-border bg-hx-panel-2 p-2">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Voice participants</span>
+            <span className="text-[10px] text-hx-ink-faint">{ctx.remoteVoiceStreams.length} live</span>
+          </div>
+          {ctx.remoteVoiceStreams.length === 0 && <p className="text-xs text-hx-ink-faint">No one else is in voice yet.</p>}
+          {ctx.remoteVoiceStreams.map((entry) => {
+            const muted = mutedVoicePlayerIds.has(entry.playerId);
+            return (
+              <div key={entry.playerId} className="mb-1 flex items-center justify-between gap-2 text-xs">
+                <span style={{ color: entry.color }} className="truncate font-semibold">
+                  {entry.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleMuteVoicePlayer(entry.playerId)}
+                  className="rounded-sm border border-hx-border px-1.5 py-0.5 text-[10px] text-hx-ink-faint transition hover:text-hx-ink"
+                >
+                  {muted ? '🔈 Unmute' : '🔇 Mute'}
+                </button>
+                <audio
+                  autoPlay
+                  playsInline
+                  muted={muted}
+                  ref={(el) => {
+                    if (!el) return;
+                    audioRefs.current.set(entry.playerId, el);
+                    if (el.srcObject !== entry.stream) el.srcObject = entry.stream;
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto rounded-sm border border-hx-border bg-hx-panel-2 p-2">
         {chatMuted && <p className="text-xs text-hx-ink-faint">Chat is muted for you — nobody else is affected.</p>}

@@ -12,7 +12,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { nanoid } from 'nanoid';
 import { applyAction, IllegalActionError, type Action, type GameState, type PlayerId } from '@/engine';
 import { connectAsJoiner, type PeerRoomHandle } from '@/lib/webrtc/peer-room';
-import type { ChatMessage, LobbyPlayerInfo } from '@/lib/webrtc/protocol';
+import type { MediaConnection } from 'peerjs';
+import type { ChatMessage, LobbyPlayerInfo, VoicePeerInfo } from '@/lib/webrtc/protocol';
 import { clearJoinSession, saveHostSession } from '@/lib/webrtc/persistence';
 
 export type P2PJoinPhase =
@@ -34,6 +35,13 @@ export type P2PJoinPhase =
       unreadChatCount: number;
       sendChat: (text: string) => void;
       markChatRead: () => void;
+      voiceEnabled: boolean;
+      voiceMuted: boolean;
+      voiceError: string | null;
+      remoteVoiceStreams: { playerId: PlayerId; name: string; color: string; stream: MediaStream }[];
+      enableVoice: () => Promise<void>;
+      disableVoice: () => void;
+      toggleVoiceMuted: () => void;
     }
   | { phase: 'error'; message: string };
 
@@ -63,6 +71,10 @@ export interface UseP2PJoinCallbacks {
 const RECONNECT_ATTEMPTS = 8;
 const RECONNECT_DELAY_MS = 2500;
 
+function stableVoiceInitiator(a: PlayerId, b: PlayerId): boolean {
+  return a < b;
+}
+
 /** Same human rejoining the same room (a dropped connection, or an accidental page refresh)
  *  should come back as the SAME in-game player, not a fresh seat — see use-p2p-host.ts's
  *  reconnect-matching. sessionStorage (not localStorage) so a genuinely new tab/session for the
@@ -85,6 +97,14 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
   const handleRef = useRef<PeerRoomHandle | null>(null);
   const gameStateRef = useRef<GameState | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const lobbyPlayersRef = useRef<LobbyPlayerInfo[]>([]);
+  const voicePeersRef = useRef<VoicePeerInfo[]>([]);
+  const voiceCallsRef = useRef(new Map<PlayerId, MediaConnection>());
+  const voiceRemoteRef = useRef(new Map<PlayerId, MediaStream>());
+  const localVoiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceEnabledRef = useRef(false);
+  const voiceMutedRef = useRef(false);
+  const inboundVoiceUnsubRef = useRef<(() => void) | null>(null);
   // [DEFAULT — direct request: "kick a player"] Checked in onHostDisconnected below — a kicked
   // peer's connection closing looks IDENTICAL to a real network drop at the transport level, but
   // it must not trigger the ordinary reconnect-retry loop (the host would just kick it again the
@@ -101,8 +121,88 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
   const [aiControlledPlayerIds, setAiControlledPlayerIds] = useState<ReadonlySet<PlayerId>>(new Set());
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [remoteVoiceStreams, setRemoteVoiceStreams] = useState<{ playerId: PlayerId; name: string; color: string; stream: MediaStream }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
+
+  const refreshRemoteVoiceStreams = useCallback(() => {
+    const byPlayer = new Map(lobbyPlayersRef.current.map((p) => [p.playerId, p]));
+    const snapshot = [...voiceRemoteRef.current.entries()].map(([playerId, stream]) => {
+      const p = byPlayer.get(playerId);
+      return { playerId, name: p?.name ?? playerId, color: p?.color ?? '#888888', stream };
+    });
+    setRemoteVoiceStreams(snapshot);
+  }, []);
+
+  const detachVoiceCall = useCallback(
+    (playerId: PlayerId, call?: MediaConnection) => {
+      const existing = voiceCallsRef.current.get(playerId);
+      if (call && existing && existing !== call) return;
+      if (existing) {
+        existing.close();
+        voiceCallsRef.current.delete(playerId);
+      }
+      if (voiceRemoteRef.current.delete(playerId)) refreshRemoteVoiceStreams();
+    },
+    [refreshRemoteVoiceStreams]
+  );
+
+  const bindVoiceCall = useCallback(
+    (playerId: PlayerId, call: MediaConnection) => {
+      const existing = voiceCallsRef.current.get(playerId);
+      if (existing && existing !== call) {
+        call.close();
+        return;
+      }
+      voiceCallsRef.current.set(playerId, call);
+      call.on('stream', (stream) => {
+        voiceRemoteRef.current.set(playerId, stream);
+        refreshRemoteVoiceStreams();
+      });
+      call.on('close', () => detachVoiceCall(playerId, call));
+      call.on('error', () => detachVoiceCall(playerId, call));
+    },
+    [detachVoiceCall, refreshRemoteVoiceStreams]
+  );
+
+  const syncVoiceConnections = useCallback(() => {
+    if (!voiceEnabledRef.current || !localVoiceStreamRef.current) return;
+    const handle = handleRef.current;
+    if (!handle) return;
+    const shouldConnectTo = new Set<PlayerId>();
+    for (const peer of voicePeersRef.current) {
+      if (peer.playerId === myPlayerId) continue;
+      if (!stableVoiceInitiator(myPlayerId, peer.playerId)) continue;
+      shouldConnectTo.add(peer.playerId);
+      if (voiceCallsRef.current.has(peer.playerId)) continue;
+      const call = handle.callPeer(peer.peerId, localVoiceStreamRef.current);
+      if (call) bindVoiceCall(peer.playerId, call);
+    }
+    for (const [pid, call] of [...voiceCallsRef.current.entries()]) {
+      if (!shouldConnectTo.has(pid) && stableVoiceInitiator(myPlayerId, pid)) {
+        call.close();
+        voiceCallsRef.current.delete(pid);
+      }
+    }
+  }, [bindVoiceCall, myPlayerId]);
+
+  const stopVoice = useCallback(() => {
+    voiceEnabledRef.current = false;
+    voiceMutedRef.current = false;
+    setVoiceEnabled(false);
+    setVoiceMuted(false);
+    for (const call of voiceCallsRef.current.values()) call.close();
+    voiceCallsRef.current.clear();
+    voiceRemoteRef.current.clear();
+    refreshRemoteVoiceStreams();
+    localVoiceStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localVoiceStreamRef.current = null;
+  }, [refreshRemoteVoiceStreams]);
+
+  useEffect(() => () => stopVoice(), [stopVoice]);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,8 +223,10 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
                 // since this effect intentionally never re-runs after the initial connect; see
                 // this effect's closing comment). connectAsJoiner's caller starts at 'connecting'
                 // and this is what actually advances it out of that on a fresh join.
+                lobbyPlayersRef.current = message.players;
                 setLobbyPlayers(message.players);
                 setPhase((p) => (p === 'connecting' ? 'lobby' : p));
+                refreshRemoteVoiceStreams();
                 break;
               case 'gameStarted':
                 gameStateRef.current = message.state;
@@ -182,6 +284,10 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
                 setChatMessages((prev) => [...prev, message.message]);
                 if (message.message.playerId !== myPlayerId) setUnreadChatCount((n) => n + 1);
                 break;
+              case 'voicePeers':
+                voicePeersRef.current = message.peers;
+                syncVoiceConnections();
+                break;
             }
           },
           onHostDisconnected() {
@@ -205,6 +311,19 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
           return;
         }
         handleRef.current = handle;
+        inboundVoiceUnsubRef.current = handle.onIncomingCall((fromPeerId, call) => {
+          if (!voiceEnabledRef.current || !localVoiceStreamRef.current) {
+            call.close();
+            return;
+          }
+          const from = voicePeersRef.current.find((p) => p.peerId === fromPeerId);
+          if (!from) {
+            call.close();
+            return;
+          }
+          call.answer(localVoiceStreamRef.current);
+          bindVoiceCall(from.playerId, call);
+        });
         // Always ask for a sync right after connecting — covers a same-mount reconnect (had
         // state, may have missed messages while disconnected) AND a fresh-mount resume from a
         // persisted room code (never had state at all, so this is the ONLY thing that unsticks
@@ -219,6 +338,8 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
     connect();
     return () => {
       cancelled = true;
+      inboundVoiceUnsubRef.current?.();
+      inboundVoiceUnsubRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       handleRef.current?.close();
       handleRef.current = null;
@@ -259,6 +380,37 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
   }, []);
   const markChatRead = useCallback(() => setUnreadChatCount(0), []);
 
+  const enableVoice = useCallback(async () => {
+    if (voiceEnabledRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      localVoiceStreamRef.current = stream;
+      stream.getAudioTracks().forEach((t) => {
+        t.enabled = true;
+      });
+      voiceEnabledRef.current = true;
+      voiceMutedRef.current = false;
+      setVoiceEnabled(true);
+      setVoiceMuted(false);
+      setVoiceError(null);
+      syncVoiceConnections();
+    } catch {
+      setVoiceError('Microphone access failed. Check browser permissions and try again.');
+    }
+  }, [syncVoiceConnections]);
+
+  const disableVoice = useCallback(() => {
+    stopVoice();
+  }, [stopVoice]);
+
+  const toggleVoiceMuted = useCallback(() => {
+    if (!localVoiceStreamRef.current) return;
+    const nextMuted = !voiceMutedRef.current;
+    voiceMutedRef.current = nextMuted;
+    for (const track of localVoiceStreamRef.current.getAudioTracks()) track.enabled = !nextMuted;
+    setVoiceMuted(nextMuted);
+  }, []);
+
   if (fatal) return { phase: 'error', message: fatal };
   if (phase === 'connecting') return { phase: 'connecting' };
   if (phase === 'lobby') return { phase: 'lobby', players: lobbyPlayers };
@@ -275,5 +427,12 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
     unreadChatCount,
     sendChat,
     markChatRead,
+    voiceEnabled,
+    voiceMuted,
+    voiceError,
+    remoteVoiceStreams,
+    enableVoice,
+    disableVoice,
+    toggleVoiceMuted,
   };
 }

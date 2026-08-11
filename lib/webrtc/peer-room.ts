@@ -18,13 +18,121 @@
  * connection. onError below surfaces that as a plain "couldn't connect" message.
  */
 
-import type { DataConnection, Peer, PeerError, PeerErrorType } from 'peerjs';
-import type { JoinerMetadata, P2PMessage } from './protocol';
+import type { DataConnection, MediaConnection, Peer, PeerError, PeerErrorType } from 'peerjs';
+import type { JoinerMetadata, LobbyPlayerInfo, P2PMessage } from './protocol';
 import { generateRoomCode, roomCodeToPeerId } from './protocol';
 
 async function loadPeerJs() {
   const mod = await import('peerjs');
   return mod.Peer;
+}
+
+type PeerCtorOptions = {
+  host?: string;
+  port?: number;
+  path?: string;
+  secure?: boolean;
+  key?: string;
+  config?: RTCConfiguration;
+};
+
+function normalizePath(path: string | undefined): string {
+  if (!path || path.trim() === '') return '/peerjs';
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
+function parseSignalingEntry(raw: string): PeerCtorOptions | null {
+  const value = raw.trim();
+  if (!value) return null;
+
+  // URL form, e.g. "https://peer.example.com/peerjs" or "wss://peer.example.com/peerjs"
+  if (value.includes('://')) {
+    try {
+      const url = new URL(value);
+      const secure = url.protocol === 'https:' || url.protocol === 'wss:';
+      const port = url.port ? Number(url.port) : secure ? 443 : 80;
+      return {
+        host: url.hostname,
+        port,
+        path: normalizePath(url.pathname),
+        secure,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // Host form, e.g. "peer.example.com:443/peerjs" or "peer.example.com".
+  const match = value.match(/^([^:/\s]+)(?::(\d+))?(\/[^\s]*)?$/);
+  if (!match) return null;
+  const host = match[1];
+  const port = match[2] ? Number(match[2]) : 443;
+  const path = normalizePath(match[3]);
+  return { host, port, path, secure: true };
+}
+
+function dedupeCandidates(candidates: PeerCtorOptions[]): PeerCtorOptions[] {
+  const seen = new Set<string>();
+  const out: PeerCtorOptions[] = [];
+  for (const c of candidates) {
+    const key = `${c.secure ?? true}|${c.host ?? ''}|${c.port ?? ''}|${normalizePath(c.path)}|${c.key ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...c, path: normalizePath(c.path) });
+  }
+  return out;
+}
+
+function defaultIceConfig(): RTCConfiguration {
+  const envUrls = process.env.NEXT_PUBLIC_PEERJS_ICE_SERVERS;
+  const urls = envUrls
+    ? envUrls
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'];
+
+  const turnUsername = process.env.NEXT_PUBLIC_PEERJS_TURN_USERNAME;
+  const turnCredential = process.env.NEXT_PUBLIC_PEERJS_TURN_CREDENTIAL;
+  if (turnUsername && turnCredential) {
+    return {
+      iceServers: [{ urls }, { urls, username: turnUsername, credential: turnCredential }],
+    };
+  }
+  return { iceServers: [{ urls }] };
+}
+
+function signalingCandidates(): PeerCtorOptions[] {
+  // Ordered fallback list. Accepts comma-separated entries in either URL or host form, e.g.:
+  // NEXT_PUBLIC_PEERJS_SIGNALING_SERVERS="https://peer-a.example.com/peerjs,https://peer-b.example.com/peerjs"
+  // or "peer-a.example.com:443/peerjs,peer-b.example.com:443/peerjs"
+  const envList = process.env.NEXT_PUBLIC_PEERJS_SIGNALING_SERVERS;
+  const envHost = process.env.NEXT_PUBLIC_PEERJS_HOST;
+  const envPort = process.env.NEXT_PUBLIC_PEERJS_PORT ? Number(process.env.NEXT_PUBLIC_PEERJS_PORT) : undefined;
+  const envPath = process.env.NEXT_PUBLIC_PEERJS_PATH;
+  const envSecure = process.env.NEXT_PUBLIC_PEERJS_SECURE ? process.env.NEXT_PUBLIC_PEERJS_SECURE === 'true' : undefined;
+  const envKey = process.env.NEXT_PUBLIC_PEERJS_KEY;
+  const iceConfig = defaultIceConfig();
+
+  const candidates: PeerCtorOptions[] = [];
+  if (envList) {
+    for (const raw of envList.split(',')) {
+      const parsed = parseSignalingEntry(raw);
+      if (parsed) candidates.push({ ...parsed, config: iceConfig });
+    }
+  }
+  // Legacy single-endpoint envs still supported.
+  if (envHost) {
+    candidates.push({ host: envHost, port: envPort, path: normalizePath(envPath), secure: envSecure ?? true, key: envKey, config: iceConfig });
+  }
+  // Built-ins: PeerJS cloud + path variant.
+  candidates.push({ host: '0.peerjs.com', port: 443, path: '/peerjs', secure: true, config: iceConfig });
+  candidates.push({ host: '0.peerjs.com', port: 443, path: '/', secure: true, config: iceConfig });
+  return dedupeCandidates(candidates);
+}
+
+function isSignalingTransportError(type: `${PeerErrorType}`): boolean {
+  return type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed';
 }
 
 export interface PeerRoomHandle {
@@ -46,6 +154,10 @@ export interface PeerRoomHandle {
    *  joiner has no other peers to disconnect) — matches send/broadcast's existing no-op symmetry
    *  on that side. */
   disconnectPeer(peerId: string): void;
+  /** Voice chat: start a direct media call to another peer id. */
+  callPeer(peerId: string, stream: MediaStream): MediaConnection | null;
+  /** Voice chat: listen for incoming direct media calls. Returns an unsubscribe. */
+  onIncomingCall(listener: (peerId: string, call: MediaConnection) => void): () => void;
   /** Tears down every connection and the underlying Peer. Always call on unmount. */
   close(): void;
 }
@@ -89,6 +201,8 @@ export interface HostRoomHandlers {
  *  SAME_CODE_RETRY_DELAY_MS below is the gap between each attempt. */
 const SAME_CODE_RETRY_ATTEMPTS = 4;
 const SAME_CODE_RETRY_DELAY_MS = 750;
+const SIGNALING_RETRY_ATTEMPTS = 4;
+const SIGNALING_RETRY_DELAY_MS = 900;
 
 /** Opens this device as the host of `roomCode` — creates a Peer whose id IS the room code (see
  *  protocol.ts's roomCodeToPeerId) so joiners can dial straight in with nothing but the code.
@@ -99,10 +213,18 @@ const SAME_CODE_RETRY_DELAY_MS = 750;
 export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers): Promise<PeerRoomHandle & { roomCode: string }> {
   const PeerCtor = await loadPeerJs();
   const connections = new Map<string, DataConnection>();
+  const callListeners = new Set<(peerId: string, call: MediaConnection) => void>();
+  const candidates = signalingCandidates();
 
-  async function open(code: string, sameCodeAttemptsLeft: number): Promise<{ peer: Peer; roomCode: string }> {
+  async function open(
+    code: string,
+    sameCodeAttemptsLeft: number,
+    candidateIndex = 0,
+    transportRetriesLeft = SIGNALING_RETRY_ATTEMPTS
+  ): Promise<{ peer: Peer; roomCode: string }> {
+    const candidate = candidates[Math.min(candidateIndex, candidates.length - 1)];
     return new Promise((resolve, reject) => {
-      const peer = new PeerCtor(roomCodeToPeerId(code));
+      const peer = new PeerCtor(roomCodeToPeerId(code), candidate);
       const onOpen = () => {
         peer.off('error', onError);
         resolve({ peer, roomCode: code });
@@ -110,14 +232,32 @@ export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers
       const onError = (err: PeerError<`${PeerErrorType}`>) => {
         peer.off('open', onOpen);
         peer.destroy();
+        if (isSignalingTransportError(err.type)) {
+          if (transportRetriesLeft > 0) {
+            setTimeout(
+              () => open(code, sameCodeAttemptsLeft, candidateIndex, transportRetriesLeft - 1).then(resolve, reject),
+              SIGNALING_RETRY_DELAY_MS
+            );
+            return;
+          }
+          if (candidateIndex + 1 < candidates.length) {
+            open(code, sameCodeAttemptsLeft, candidateIndex + 1, SIGNALING_RETRY_ATTEMPTS).then(resolve, reject);
+            return;
+          }
+          reject(new Error(friendlyPeerError(err)));
+          return;
+        }
         if (err.type !== 'unavailable-id') {
           reject(new Error(friendlyPeerError(err)));
           return;
         }
         if (sameCodeAttemptsLeft > 0) {
-          setTimeout(() => open(code, sameCodeAttemptsLeft - 1).then(resolve, reject), SAME_CODE_RETRY_DELAY_MS);
+          setTimeout(
+            () => open(code, sameCodeAttemptsLeft - 1, candidateIndex, SIGNALING_RETRY_ATTEMPTS).then(resolve, reject),
+            SAME_CODE_RETRY_DELAY_MS
+          );
         } else {
-          open(generateRoomCode(), 0).then(resolve, reject);
+          open(generateRoomCode(), 0, candidateIndex, SIGNALING_RETRY_ATTEMPTS).then(resolve, reject);
         }
       };
       peer.once('open', onOpen);
@@ -128,6 +268,12 @@ export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers
   const { peer, roomCode: resolvedCode } = await open(roomCode, SAME_CODE_RETRY_ATTEMPTS);
 
   peer.on('connection', (conn) => {
+    const handleDisconnect = () => {
+      // Both 'close' and 'error' can fire for the same connection. Only process once.
+      if (!connections.has(conn.peer)) return;
+      connections.delete(conn.peer);
+      handlers.onJoinerDisconnected(conn.peer);
+    };
     conn.on('open', () => {
       connections.set(conn.peer, conn);
       const meta = (conn.metadata ?? {}) as Partial<JoinerMetadata>;
@@ -138,17 +284,14 @@ export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers
       });
     });
     conn.on('data', (data) => handlers.onJoinerMessage(conn.peer, data as P2PMessage));
-    conn.on('close', () => {
-      connections.delete(conn.peer);
-      handlers.onJoinerDisconnected(conn.peer);
-    });
-    conn.on('error', () => {
-      connections.delete(conn.peer);
-      handlers.onJoinerDisconnected(conn.peer);
-    });
+    conn.on('close', handleDisconnect);
+    conn.on('error', handleDisconnect);
   });
   peer.on('error', (err) => handlers.onFatalError(friendlyPeerError(err)));
   peer.on('disconnected', () => handlers.onFatalError('Lost connection to the signaling server.'));
+  peer.on('call', (call) => {
+    for (const listener of callListeners) listener(call.peer, call);
+  });
 
   return {
     selfId: peer.id,
@@ -169,9 +312,21 @@ export async function connectAsHost(roomCode: string, handlers: HostRoomHandlers
       // notifies handlers.onJoinerDisconnected, exactly like a real network drop would.
       connections.get(peerId)?.close();
     },
+    callPeer(peerId, stream) {
+      try {
+        return peer.call(peerId, stream);
+      } catch {
+        return null;
+      }
+    },
+    onIncomingCall(listener) {
+      callListeners.add(listener);
+      return () => callListeners.delete(listener);
+    },
     close() {
       for (const conn of connections.values()) conn.close();
       connections.clear();
+      callListeners.clear();
       peer.destroy();
     },
   };
@@ -185,25 +340,121 @@ export interface JoinRoomHandlers {
   onFatalError: (message: string) => void;
 }
 
+/** One-shot roster fetch used by the join setup screen to disable already-taken options before
+ *  connecting as a real player. */
+export async function probeLobby(roomCode: string): Promise<LobbyPlayerInfo[]> {
+  const PeerCtor = await loadPeerJs();
+  const candidates = signalingCandidates();
+
+  const peer = await new Promise<Peer>((resolve, reject) => {
+    const tryCandidate = (idx: number, transportRetriesLeft: number) => {
+      const candidate = candidates[Math.min(idx, candidates.length - 1)];
+      const p = new PeerCtor(undefined, candidate);
+      const onOpen = () => {
+        p.off('error', onError);
+        resolve(p);
+      };
+      const onError = (err: PeerError<`${PeerErrorType}`>) => {
+        p.off('open', onOpen);
+        p.destroy();
+        if (isSignalingTransportError(err.type)) {
+          if (transportRetriesLeft > 0) {
+            setTimeout(() => tryCandidate(idx, transportRetriesLeft - 1), SIGNALING_RETRY_DELAY_MS);
+            return;
+          }
+          if (idx + 1 < candidates.length) {
+            tryCandidate(idx + 1, SIGNALING_RETRY_ATTEMPTS);
+            return;
+          }
+        }
+        reject(new Error(friendlyPeerError(err)));
+      };
+      p.once('open', onOpen);
+      p.once('error', onError);
+    };
+    tryCandidate(0, SIGNALING_RETRY_ATTEMPTS);
+  });
+
+  return await new Promise<LobbyPlayerInfo[]>((resolve, reject) => {
+    const probeMeta: JoinerMetadata = {
+      name: '__probe__',
+      color: '#000000',
+      playerId: `probe-${Math.random().toString(36).slice(2, 10)}`,
+      probe: true,
+    };
+    const conn = peer.connect(roomCodeToPeerId(roomCode), { metadata: probeMeta, reliable: true });
+
+    let settled = false;
+    let gotLobbyUpdate = false;
+    const finish = (value: LobbyPlayerInfo[] | Error, isError = false) => {
+      if (settled) return;
+      settled = true;
+      try {
+        conn.close();
+      } catch {}
+      peer.destroy();
+      if (isError) reject(value as Error);
+      else resolve(value as LobbyPlayerInfo[]);
+    };
+
+    const timer = setTimeout(() => finish(new Error('Lobby probe timed out'), true), 5000);
+    conn.on('data', (data) => {
+      const msg = data as P2PMessage;
+      if (msg.kind !== 'lobbyUpdate') return;
+      gotLobbyUpdate = true;
+      clearTimeout(timer);
+      finish(msg.players);
+    });
+    conn.once('error', (err) => {
+      clearTimeout(timer);
+      finish(new Error(err.message || "Couldn't fetch lobby preview."), true);
+    });
+    conn.once('close', () => {
+      if (settled) return;
+      clearTimeout(timer);
+      if (gotLobbyUpdate) finish([]);
+      else finish(new Error('Lobby probe closed before roster arrived'), true);
+    });
+  });
+}
+
 /** Connects this device to `roomCode`'s host. Resolves once the DataConnection is open and ready
  *  to send — callers should send an initial P2PMessage (or rely on connection metadata, which the
  *  host already sees on onJoinerConnected) right after this resolves. */
 export async function connectAsJoiner(roomCode: string, myInfo: JoinerMetadata, handlers: JoinRoomHandlers): Promise<PeerRoomHandle> {
   const PeerCtor = await loadPeerJs();
+  const callListeners = new Set<(peerId: string, call: MediaConnection) => void>();
+  const candidates = signalingCandidates();
 
   const peer = await new Promise<Peer>((resolve, reject) => {
-    const p = new PeerCtor();
-    const onOpen = () => {
-      p.off('error', onError);
-      resolve(p);
+    const tryCandidate = (idx: number, transportRetriesLeft: number) => {
+      const candidate = candidates[Math.min(idx, candidates.length - 1)];
+      const p = new PeerCtor(undefined, candidate);
+      const onOpen = () => {
+        p.off('error', onError);
+        resolve(p);
+      };
+      const onError = (err: PeerError<`${PeerErrorType}`>) => {
+        p.off('open', onOpen);
+        p.destroy();
+        if (isSignalingTransportError(err.type)) {
+          if (transportRetriesLeft > 0) {
+            setTimeout(() => tryCandidate(idx, transportRetriesLeft - 1), SIGNALING_RETRY_DELAY_MS);
+            return;
+          }
+          if (idx + 1 < candidates.length) {
+            tryCandidate(idx + 1, SIGNALING_RETRY_ATTEMPTS);
+            return;
+          }
+          reject(new Error(friendlyPeerError(err)));
+          return;
+        }
+        reject(new Error(friendlyPeerError(err)));
+      };
+      p.once('open', onOpen);
+      p.once('error', onError);
     };
-    const onError = (err: PeerError<`${PeerErrorType}`>) => {
-      p.off('open', onOpen);
-      p.destroy();
-      reject(new Error(friendlyPeerError(err)));
-    };
-    p.once('open', onOpen);
-    p.once('error', onError);
+    tryCandidate(0, SIGNALING_RETRY_ATTEMPTS);
   });
 
   const conn = await new Promise<DataConnection>((resolve, reject) => {
@@ -225,10 +476,19 @@ export async function connectAsJoiner(roomCode: string, myInfo: JoinerMetadata, 
   });
 
   conn.on('data', (data) => handlers.onHostMessage(data as P2PMessage));
-  conn.on('close', () => handlers.onHostDisconnected());
-  conn.on('error', () => handlers.onHostDisconnected());
+  let hostDisconnectedNotified = false;
+  const notifyHostDisconnected = () => {
+    if (hostDisconnectedNotified) return;
+    hostDisconnectedNotified = true;
+    handlers.onHostDisconnected();
+  };
+  conn.on('close', notifyHostDisconnected);
+  conn.on('error', notifyHostDisconnected);
   peer.on('error', (err) => handlers.onFatalError(friendlyPeerError(err)));
   peer.on('disconnected', () => handlers.onFatalError('Lost connection to the signaling server.'));
+  peer.on('call', (call) => {
+    for (const listener of callListeners) listener(call.peer, call);
+  });
 
   return {
     selfId: peer.id,
@@ -246,8 +506,20 @@ export async function connectAsJoiner(roomCode: string, myInfo: JoinerMetadata, 
       // A joiner has no other peers to disconnect (star topology) — no-op, same symmetry as
       // send/broadcast above.
     },
+    callPeer(peerId, stream) {
+      try {
+        return peer.call(peerId, stream);
+      } catch {
+        return null;
+      }
+    },
+    onIncomingCall(listener) {
+      callListeners.add(listener);
+      return () => callListeners.delete(listener);
+    },
     close() {
       conn.close();
+      callListeners.clear();
       peer.destroy();
     },
   };

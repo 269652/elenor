@@ -382,6 +382,40 @@ npm run dev
 
 Open the printed `localhost` URL — Hotseat and P2P modes work immediately, no setup required.
 
+### Optional: P2P signaling fallbacks
+
+If your network intermittently blocks the default PeerJS cloud broker, you can provide an ordered
+fallback list of signaling servers. The app will try each entry in order.
+
+Add this to `.env.local`:
+
+```bash
+# Comma-separated; each entry can be a URL or host:port/path
+NEXT_PUBLIC_PEERJS_SIGNALING_SERVERS="https://peer-a.example.com/peerjs,https://peer-b.example.com/peerjs"
+
+# Optional ICE servers (STUN/TURN) for WebRTC connectivity, comma-separated URLs.
+# Defaults already include Google's STUN servers if unset.
+# NEXT_PUBLIC_PEERJS_ICE_SERVERS="stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"
+
+# Optional TURN credentials (if your ICE list includes turn: or turns: URLs)
+# NEXT_PUBLIC_PEERJS_TURN_USERNAME="your-turn-user"
+# NEXT_PUBLIC_PEERJS_TURN_CREDENTIAL="your-turn-pass"
+
+# Optional legacy single-endpoint override (still supported)
+# NEXT_PUBLIC_PEERJS_HOST="peer-a.example.com"
+# NEXT_PUBLIC_PEERJS_PORT="443"
+# NEXT_PUBLIC_PEERJS_PATH="/peerjs"
+# NEXT_PUBLIC_PEERJS_SECURE="true"
+# NEXT_PUBLIC_PEERJS_KEY="peerjs"
+```
+
+Accepted entry formats for `NEXT_PUBLIC_PEERJS_SIGNALING_SERVERS`:
+
+- `https://peer-a.example.com/peerjs`
+- `wss://peer-a.example.com/peerjs`
+- `peer-a.example.com:443/peerjs`
+- `peer-a.example.com`
+
 **To also enable Online (Realtime/Async) play**, you'll need your own free
 [Supabase](https://supabase.com) project:
 

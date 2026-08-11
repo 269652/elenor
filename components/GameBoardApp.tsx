@@ -191,13 +191,14 @@ function garrisonsOf(state: GameState, player: Player): Tile[] {
  *  already uses (e.g. the CTA panel's canAct-driven border below), rather than CSS
  *  `peer-checked:` — kept it simpler and sidesteps the custom-color-token specificity quirks
  *  peer-checked ran into against this app's `bg-hx-*` theme tokens. */
-function IosSwitch({ checked, onChange, label }: { checked: boolean; onChange: (next: boolean) => void; label: string }) {
+function IosSwitch({ checked, onChange, label, disabled = false }: { checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean }) {
   return (
-    <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-hx-ink-dim">
+    <label className={clsx('inline-flex items-center gap-2 text-xs text-hx-ink-dim', disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}>
       <span className="relative inline-block h-5 w-9 shrink-0">
         <input
           type="checkbox"
           checked={checked}
+          disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
           className="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0"
         />
@@ -493,7 +494,7 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
   return (
     <>
       <TableBackdrop />
-      <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-[1fr_380px]">
+      <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-[1fr_396px] lg:gap-x-0">
       {/* [DEFAULT — direct request: "the main left screen should not be scrollable .. zoom out
           if there's not enough space"] `min-h-0` at both levels here is the actual fix: a flex
           item's default `min-height: auto` refuses to shrink below its content's intrinsic size,
@@ -504,7 +505,7 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
           and HexBoard's own SVG viewBox (components/board/HexBoard.tsx) already scales to fit
           however many tiles are on it — the effective behavior IS "zoom out as the map grows,"
           it just needs the container to actually hand it a bounded box to zoom into. */}
-      <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="relative flex h-full min-h-0 flex-col gap-3">
         {/* [DEFAULT — UI feedback change, direct request: "move the stock panel from the sidebar
             to top of left screen to free some space"] ResourceBar is already a compact
             horizontal bar (flex-wrap of small pills) — moved off the sidebar entirely and onto
@@ -526,7 +527,7 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
         </div>
       </div>
 
-      <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden lg:pl-4">
         {/* [DEFAULT — direct request: "a little chat in a second tab of sidebar .. badge with
             unread messages"] P2P-only — hotseat/online render nothing here at all (p2p is
             undefined), reproducing the sidebar's exact pre-existing layout with zero change. */}
@@ -562,7 +563,7 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
         {p2p && sidebarTab === 'chat' ? (
           <ChatPanel ctx={p2p} />
         ) : (
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto">
         <div className={PANEL}>
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
@@ -614,6 +615,8 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
           </div>
         )}
 
+        <div className="relative flex min-h-0 flex-col gap-3">
+
         {/* [DEFAULT — autoplay] Two controls, matching the ask exactly: a switch that only
             changes MODE (continuous vs single-round) and a button that's the actual go/stop
             trigger. Placed near the top, close to the phase tracker, since it's a meta-control a
@@ -623,6 +626,7 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
           <div className="flex items-center justify-between gap-2">
             <IosSwitch
               checked={currentPlayerContinuous}
+              disabled={!canAct}
               onChange={(next) => {
                 setContinuousByPlayer((prev) => ({ ...prev, [state.currentPlayerId]: next }));
                 // "until switch is deactivated again" — turning it off mid-run is itself the
@@ -816,6 +820,7 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
         <DoorCardPanel state={state} />
 
         <TradePanel player={player} dispatch={dispatch} canAct={canAct} />
+        </div>
       </div>
         )}
       </div>
@@ -935,7 +940,7 @@ function PhaseActions(props: PhaseActionsProps) {
             >
               Confirm Move
             </button>
-            <button type="button" disabled={pendingPath.length === 0} onClick={() => setPendingPath([])} className={BTN_GHOST}>
+            <button type="button" disabled={!canAct || pendingPath.length === 0} onClick={() => setPendingPath([])} className={BTN_GHOST}>
               Clear
             </button>
           </div>
@@ -1123,6 +1128,7 @@ function ArmyPanel({
             <li key={hexKey(t.coord)}>
               <button
                 type="button"
+                disabled={!canAct}
                 onClick={() => {
                   setSelectedCoord(t.coord);
                   setMarchFrom(null);
@@ -1166,12 +1172,13 @@ function ArmyPanel({
               type="number"
               min={1}
               max={available}
+              disabled={!canAct}
               value={count}
               onChange={(e) => setMarchCount(Math.max(1, Math.min(available, Number(e.target.value) || 1)))}
               className={`w-14 ${INPUT}`}
             />
             <span className="text-[11px] text-hx-ink-faint">of {available}</span>
-            <button type="button" onClick={() => setMarchCount(available)} className="ml-auto rounded-sm border border-hx-border px-1.5 py-0.5 text-[10px] text-hx-ink-dim transition hover:border-hx-gold/50 hover:text-hx-ink">
+            <button type="button" disabled={!canAct} onClick={() => setMarchCount(available)} className="ml-auto rounded-sm border border-hx-border px-1.5 py-0.5 text-[10px] text-hx-ink-dim transition hover:border-hx-gold/50 hover:text-hx-ink disabled:cursor-not-allowed disabled:opacity-40">
               All
             </button>
           </div>
@@ -1237,6 +1244,7 @@ function ArmyPanel({
               <input
                 type="checkbox"
                 checked={heroJoinsAssault}
+                disabled={!canAct}
                 onChange={(e) => setHeroJoinsAssault(e.target.checked)}
                 className="mt-0.5 accent-hx-blood"
               />
@@ -1268,11 +1276,12 @@ function ArmyPanel({
             </button>
             <button
               type="button"
+              disabled={!canAct}
               onClick={() => {
                 setPendingAssault(null);
                 setHeroJoinsAssault(false);
               }}
-              className={BTN_GHOST}
+              className={clsx(BTN_GHOST, 'disabled:cursor-not-allowed disabled:opacity-40')}
             >
               Cancel
             </button>

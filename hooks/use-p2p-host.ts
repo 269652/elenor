@@ -26,7 +26,8 @@ import { nanoid } from 'nanoid';
 import { applyAction, createGame, IllegalActionError, type Action, type GameState, type PlayerId } from '@/engine';
 import { useAiTurn } from '@/hooks/use-ai-turn';
 import { connectAsHost, type PeerRoomHandle } from '@/lib/webrtc/peer-room';
-import type { ChatMessage, LobbyPlayerInfo } from '@/lib/webrtc/protocol';
+import type { MediaConnection } from 'peerjs';
+import type { ChatMessage, LobbyPlayerInfo, VoicePeerInfo } from '@/lib/webrtc/protocol';
 import { generateRoomCode } from '@/lib/webrtc/protocol';
 import { clearHostSession, loadHostSession, saveHostSession, saveJoinSession } from '@/lib/webrtc/persistence';
 
@@ -56,6 +57,13 @@ export type P2PHostPhase =
       unreadChatCount: number;
       sendChat: (text: string) => void;
       markChatRead: () => void;
+      voiceEnabled: boolean;
+      voiceMuted: boolean;
+      voiceError: string | null;
+      remoteVoiceStreams: { playerId: PlayerId; name: string; color: string; stream: MediaStream }[];
+      enableVoice: () => Promise<void>;
+      disableVoice: () => void;
+      toggleVoiceMuted: () => void;
     }
   | { phase: 'error'; message: string };
 
@@ -75,6 +83,18 @@ export interface UseP2PHostCallbacks {
 
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
+
+function normalizeLobbyName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function normalizeLobbyColor(color: string): string {
+  return color.trim().toLowerCase();
+}
+
+function stableVoiceInitiator(a: PlayerId, b: PlayerId): boolean {
+  return a < b;
+}
 
 export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = {}): P2PHostPhase {
   // [DEFAULT — direct request: "if the host reloads the tab it should be restored after reload
@@ -140,6 +160,13 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   // (someone else's message) and sendChat below (this device's own), so both paths stamp
   // id/sentAt/name/color and broadcast identically. Same ref-indirection reason as persistRef.
   const relayChatRef = useRef<(text: string, fromPlayerId: PlayerId) => void>(() => {});
+  const voicePeersRef = useRef<VoicePeerInfo[]>([]);
+  const voiceCallsRef = useRef(new Map<PlayerId, MediaConnection>());
+  const voiceRemoteRef = useRef(new Map<PlayerId, MediaStream>());
+  const localVoiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceEnabledRef = useRef(false);
+  const voiceMutedRef = useRef(false);
+  const inboundVoiceUnsubRef = useRef<(() => void) | null>(null);
   const callbacksRef = useRef(callbacks);
   useEffect(() => {
     callbacksRef.current = callbacks;
@@ -152,8 +179,87 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   const [aiControlledPlayerIds, setAiControlledPlayerIds] = useState<ReadonlySet<PlayerId>>(new Set());
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [remoteVoiceStreams, setRemoteVoiceStreams] = useState<{ playerId: PlayerId; name: string; color: string; stream: MediaStream }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
+
+  const refreshRemoteVoiceStreams = useCallback(() => {
+    const snapshot = [...voiceRemoteRef.current.entries()].map(([playerId, stream]) => {
+      const p = playersRef.current.get(playerId);
+      return { playerId, name: p?.name ?? playerId, color: p?.color ?? '#888888', stream };
+    });
+    setRemoteVoiceStreams(snapshot);
+  }, []);
+
+  const detachVoiceCall = useCallback(
+    (playerId: PlayerId, call?: MediaConnection) => {
+      const existing = voiceCallsRef.current.get(playerId);
+      if (call && existing && existing !== call) return;
+      if (existing) {
+        existing.close();
+        voiceCallsRef.current.delete(playerId);
+      }
+      if (voiceRemoteRef.current.delete(playerId)) refreshRemoteVoiceStreams();
+    },
+    [refreshRemoteVoiceStreams]
+  );
+
+  const bindVoiceCall = useCallback(
+    (playerId: PlayerId, call: MediaConnection) => {
+      const existing = voiceCallsRef.current.get(playerId);
+      if (existing && existing !== call) {
+        call.close();
+        return;
+      }
+      voiceCallsRef.current.set(playerId, call);
+      call.on('stream', (stream) => {
+        voiceRemoteRef.current.set(playerId, stream);
+        refreshRemoteVoiceStreams();
+      });
+      call.on('close', () => detachVoiceCall(playerId, call));
+      call.on('error', () => detachVoiceCall(playerId, call));
+    },
+    [detachVoiceCall, refreshRemoteVoiceStreams]
+  );
+
+  const syncVoiceConnections = useCallback(() => {
+    if (!voiceEnabledRef.current || !localVoiceStreamRef.current) return;
+    const handle = handleRef.current;
+    if (!handle) return;
+    const shouldConnectTo = new Set<PlayerId>();
+    for (const peer of voicePeersRef.current) {
+      if (peer.playerId === myPlayerId) continue;
+      if (!stableVoiceInitiator(myPlayerId, peer.playerId)) continue;
+      shouldConnectTo.add(peer.playerId);
+      if (voiceCallsRef.current.has(peer.playerId)) continue;
+      const call = handle.callPeer(peer.peerId, localVoiceStreamRef.current);
+      if (call) bindVoiceCall(peer.playerId, call);
+    }
+    for (const [pid, call] of [...voiceCallsRef.current.entries()]) {
+      if (!shouldConnectTo.has(pid) && stableVoiceInitiator(myPlayerId, pid)) {
+        call.close();
+        voiceCallsRef.current.delete(pid);
+      }
+    }
+  }, [bindVoiceCall, myPlayerId]);
+
+  const stopVoice = useCallback(() => {
+    voiceEnabledRef.current = false;
+    voiceMutedRef.current = false;
+    setVoiceEnabled(false);
+    setVoiceMuted(false);
+    for (const call of voiceCallsRef.current.values()) call.close();
+    voiceCallsRef.current.clear();
+    voiceRemoteRef.current.clear();
+    refreshRemoteVoiceStreams();
+    localVoiceStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localVoiceStreamRef.current = null;
+  }, [refreshRemoteVoiceStreams]);
+
+  useEffect(() => () => stopVoice(), [stopVoice]);
 
   useEffect(() => {
     let cancelled = false;
@@ -168,6 +274,21 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     }
     syncLobbyStateRef.current = syncLobbyState;
 
+    function currentVoicePeers(localHandle: PeerRoomHandle): VoicePeerInfo[] {
+      const peers: VoicePeerInfo[] = [{ playerId: myPlayerId, peerId: localHandle.selfId }];
+      for (const [peerId, pid] of peerIdToPlayerId.current.entries()) {
+        if (playersRef.current.has(pid)) peers.push({ playerId: pid, peerId });
+      }
+      return peers;
+    }
+
+    function broadcastVoicePeers(localHandle: PeerRoomHandle) {
+      const peers = currentVoicePeers(localHandle);
+      voicePeersRef.current = peers;
+      localHandle.broadcast({ kind: 'voicePeers', peers });
+      syncVoiceConnections();
+    }
+
     (async () => {
       try {
         // [DEFAULT — host reload restore] Reopen the SAME room code if resuming, instead of
@@ -176,15 +297,44 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
         handle = await connectAsHost(resumed?.roomCode ?? generateRoomCode(), {
           onJoinerConnected(peerId, meta) {
             if (cancelled) return;
+            const activeHandle = handleRef.current ?? handle;
+
+            if (meta.probe) {
+              const roster = [...playersRef.current.values()];
+              activeHandle.send(peerId, { kind: 'lobbyUpdate', players: roster });
+              setTimeout(() => activeHandle.disconnectPeer(peerId), 100);
+              return;
+            }
             // [DEFAULT — direct request: "kick a player"] Checked before anything else touches
             // the roster — a kicked player's own reconnect loop (hooks/use-p2p-join.ts) has no
             // idea they were kicked and will just redial the same room code; this is what stops
             // that from silently walking them back in.
             if (bannedPlayerIds.current.has(meta.playerId)) {
-              handleRef.current?.send(peerId, { kind: 'kicked', reason: 'Removed by the host' });
-              setTimeout(() => handleRef.current?.disconnectPeer(peerId), 250);
+              activeHandle.send(peerId, { kind: 'kicked', reason: 'Removed by the host' });
+              setTimeout(() => activeHandle.disconnectPeer(peerId), 250);
               return;
             }
+
+            // Enforce unique lobby identity constraints across different seats.
+            // Reconnects for the SAME stable playerId are allowed to keep their existing seat.
+            const duplicateName = [...playersRef.current.values()].find(
+              (p) => p.playerId !== meta.playerId && normalizeLobbyName(p.name) === normalizeLobbyName(meta.name)
+            );
+            if (duplicateName) {
+              activeHandle.send(peerId, { kind: 'kicked', reason: `Name "${meta.name}" is already taken — choose a different name.` });
+              setTimeout(() => activeHandle.disconnectPeer(peerId), 250);
+              return;
+            }
+
+            const duplicateColor = [...playersRef.current.values()].find(
+              (p) => p.playerId !== meta.playerId && normalizeLobbyColor(p.color) === normalizeLobbyColor(meta.color)
+            );
+            if (duplicateColor) {
+              activeHandle.send(peerId, { kind: 'kicked', reason: `Color ${meta.color} is already taken — choose a different color.` });
+              setTimeout(() => activeHandle.disconnectPeer(peerId), 250);
+              return;
+            }
+
             peerIdToPlayerId.current.set(peerId, meta.playerId);
 
             // [DEFAULT — direct request: "the admin can manage the players"] Kept current
@@ -193,6 +343,7 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             const alreadyKnown = playersRef.current.has(meta.playerId);
             playersRef.current.set(meta.playerId, { playerId: meta.playerId, name: meta.name, color: meta.color, isHost: false });
             const list = syncLobbyState();
+            broadcastVoicePeers(handleRef.current ?? handle);
 
             if (gameStateRef.current) {
               // Game already started: this is either a genuine reconnect (welcome back — resend
@@ -204,16 +355,16 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
                 state: gameStateRef.current,
                 aiControlledPlayerIds: [...aiControlledRef.current],
               });
-              if (!alreadyKnown) handleRef.current?.broadcast({ kind: 'lobbyUpdate', players: list });
+              if (!alreadyKnown) activeHandle.broadcast({ kind: 'lobbyUpdate', players: list });
               return;
             }
 
             if (alreadyKnown) {
               // A second live connection for a stable id already on the roster — just bring
               // THIS connection's own view up to date, nothing changed for anyone else.
-              handleRef.current?.send(peerId, { kind: 'lobbyUpdate', players: list });
+              activeHandle.send(peerId, { kind: 'lobbyUpdate', players: list });
             } else {
-              handleRef.current?.broadcast({ kind: 'lobbyUpdate', players: list });
+              activeHandle.broadcast({ kind: 'lobbyUpdate', players: list });
             }
           },
           onJoinerMessage(peerId, message) {
@@ -281,6 +432,7 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             playersRef.current.delete(stablePlayerId);
             const list = syncLobbyState();
             handleRef.current?.broadcast({ kind: 'lobbyUpdate', players: list });
+            if (handleRef.current) broadcastVoicePeers(handleRef.current);
           },
           onFatalError(message) {
             if (!cancelled) setFatal(message);
@@ -292,6 +444,19 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
         }
         handleRef.current = handle;
         setRoomCode(handle.roomCode);
+        inboundVoiceUnsubRef.current = handle.onIncomingCall((fromPeerId, call) => {
+          if (!voiceEnabledRef.current || !localVoiceStreamRef.current) {
+            call.close();
+            return;
+          }
+          const fromPlayerId = peerIdToPlayerId.current.get(fromPeerId);
+          if (!fromPlayerId) {
+            call.close();
+            return;
+          }
+          call.answer(localVoiceStreamRef.current);
+          bindVoiceCall(fromPlayerId, call);
+        });
 
         // [DEFAULT — host reload restore] Ignore the hostInfo PROP entirely when resuming — it
         // reflects whatever P2PApp happened to seed its own name/color state with on this fresh
@@ -302,6 +467,7 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
         effectiveNameRef.current = effectiveName;
         effectiveColorRef.current = effectiveColor;
         playersRef.current.set(myPlayerId, { playerId: myPlayerId, name: effectiveName, color: effectiveColor, isHost: true });
+        voicePeersRef.current = [{ playerId: myPlayerId, peerId: handle.selfId }];
 
         persistRef.current = () => {
           saveHostSession({
@@ -340,9 +506,11 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
           // retry loop (hooks/use-p2p-join.ts) and re-announce themselves via onJoinerConnected
           // above, which already re-sends stateSync to anyone recognized once gameStateRef is set.
           setGameState(gameStateRef.current);
+          broadcastVoicePeers(handle);
           setPhase('active');
         } else {
           syncLobbyState();
+          broadcastVoicePeers(handle);
           setPhase('lobby');
         }
       } catch (err) {
@@ -352,6 +520,8 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
 
     return () => {
       cancelled = true;
+      inboundVoiceUnsubRef.current?.();
+      inboundVoiceUnsubRef.current = null;
       handleRef.current?.close();
       handleRef.current = null;
     };
@@ -474,6 +644,37 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   );
   const markChatRead = useCallback(() => setUnreadChatCount(0), []);
 
+  const enableVoice = useCallback(async () => {
+    if (voiceEnabledRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      localVoiceStreamRef.current = stream;
+      stream.getAudioTracks().forEach((t) => {
+        t.enabled = true;
+      });
+      voiceEnabledRef.current = true;
+      voiceMutedRef.current = false;
+      setVoiceEnabled(true);
+      setVoiceMuted(false);
+      setVoiceError(null);
+      syncVoiceConnections();
+    } catch {
+      setVoiceError('Microphone access failed. Check browser permissions and try again.');
+    }
+  }, [syncVoiceConnections]);
+
+  const disableVoice = useCallback(() => {
+    stopVoice();
+  }, [stopVoice]);
+
+  const toggleVoiceMuted = useCallback(() => {
+    if (!localVoiceStreamRef.current) return;
+    const nextMuted = !voiceMutedRef.current;
+    voiceMutedRef.current = nextMuted;
+    for (const track of localVoiceStreamRef.current.getAudioTracks()) track.enabled = !nextMuted;
+    setVoiceMuted(nextMuted);
+  }, []);
+
   if (fatal) return { phase: 'error', message: fatal };
   if (phase === 'connecting') return { phase: 'connecting' };
   if (phase === 'lobby') {
@@ -497,5 +698,12 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     unreadChatCount,
     sendChat,
     markChatRead,
+    voiceEnabled,
+    voiceMuted,
+    voiceError,
+    remoteVoiceStreams,
+    enableVoice,
+    disableVoice,
+    toggleVoiceMuted,
   };
 }

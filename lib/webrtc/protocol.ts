@@ -54,6 +54,14 @@ export interface JoinerMetadata {
   name: string;
   color: string;
   playerId: PlayerId;
+  /** Lightweight lobby peek from join setup — not a real seat join. */
+  probe?: boolean;
+}
+
+/** Stable player id + current PeerJS connection id for direct media calls between clients. */
+export interface VoicePeerInfo {
+  playerId: PlayerId;
+  peerId: string;
 }
 
 /** Every message that ever crosses a DataConnection, either direction. PeerJS serializes plain
@@ -103,7 +111,9 @@ export type P2PMessage =
   /** Host -> every joiner (sender included, so their own message renders from the same code path
    *  as everyone else's rather than an optimistic local echo that could end up styled/ordered
    *  differently). */
-  | { kind: 'chatMessage'; message: ChatMessage };
+  | { kind: 'chatMessage'; message: ChatMessage }
+  /** Host -> every joiner: current direct-call address book for voice chat. */
+  | { kind: 'voicePeers'; peers: VoicePeerInfo[] };
 
 /** Human-typeable room code: Crockford-ish alphabet (no 0/O/1/I/L) so it reads back unambiguously
  *  read aloud or over chat. This is a TRANSPORT/session identifier, not game state — unrelated to

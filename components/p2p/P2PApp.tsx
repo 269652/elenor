@@ -15,6 +15,7 @@ import { BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/component
 import { useP2PHost, type P2PHostPhase } from '@/hooks/use-p2p-host';
 import { useP2PJoin, type P2PJoinPhase } from '@/hooks/use-p2p-join';
 import { isPlausibleRoomCode, normalizeRoomCode, type LobbyPlayerInfo } from '@/lib/webrtc/protocol';
+import { probeLobby } from '@/lib/webrtc/peer-room';
 import { clearHostSession, clearJoinSession, loadHostSession, loadJoinSession, saveJoinSession } from '@/lib/webrtc/persistence';
 import type { P2PRoomContext } from './types';
 
@@ -39,13 +40,18 @@ function CenteredScreen({ children }: { children: ReactNode }) {
   return <div className="flex h-full w-full items-center justify-center overflow-y-auto p-4">{children}</div>;
 }
 
-function ConnectingScreen({ label }: { label: string }) {
+function ConnectingScreen({ label, onCancel }: { label: string; onCancel?: () => void }) {
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-3 p-6 text-center">
       <span className="text-3xl motion-safe:animate-pulse" aria-hidden="true">
         🔗
       </span>
       <p className="text-sm text-hx-ink-dim">{label}</p>
+      {onCancel && (
+        <button type="button" onClick={onCancel} className={BTN_GHOST}>
+          ✖ Leave room
+        </button>
+      )}
     </div>
   );
 }
@@ -172,7 +178,7 @@ function P2PHostRoom({
     if (result.phase === 'lobby' || result.phase === 'active') roomCodeRef.current = result.roomCode;
   });
 
-  if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label="Opening a room…" /></CenteredScreen>;
+  if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label="Opening a room…" onCancel={onLeave} /></CenteredScreen>;
   if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
   if (result.phase === 'lobby') return <CenteredScreen><HostLobby hostState={result} onLeave={onLeave} /></CenteredScreen>;
   // Unwrapped, same as components/HotseatApp.tsx's LocalGame — GameBoardApp's own grid fills the
@@ -189,6 +195,13 @@ function P2PHostRoom({
     unreadChatCount: result.unreadChatCount,
     sendChat: result.sendChat,
     markChatRead: result.markChatRead,
+    voiceEnabled: result.voiceEnabled,
+    voiceMuted: result.voiceMuted,
+    voiceError: result.voiceError,
+    remoteVoiceStreams: result.remoteVoiceStreams,
+    enableVoice: result.enableVoice,
+    disableVoice: result.disableVoice,
+    toggleVoiceMuted: result.toggleVoiceMuted,
   };
   return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} p2p={ctx} />;
 }
@@ -216,7 +229,7 @@ function P2PJoinRoom({
   const myInfo = useMemo(() => ({ name, color }), [name, color]);
   const result: P2PJoinPhase = useP2PJoin(roomCode, myInfo, { onBecameHost });
 
-  if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label={`Connecting to room ${roomCode}…`} /></CenteredScreen>;
+  if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label={`Connecting to room ${roomCode}…`} onCancel={onLeave} /></CenteredScreen>;
   if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
   if (result.phase === 'lobby') {
     return (
@@ -244,6 +257,13 @@ function P2PJoinRoom({
     unreadChatCount: result.unreadChatCount,
     sendChat: result.sendChat,
     markChatRead: result.markChatRead,
+    voiceEnabled: result.voiceEnabled,
+    voiceMuted: result.voiceMuted,
+    voiceError: result.voiceError,
+    remoteVoiceStreams: result.remoteVoiceStreams,
+    enableVoice: result.enableVoice,
+    disableVoice: result.disableVoice,
+    toggleVoiceMuted: result.toggleVoiceMuted,
   };
   return <GameBoardApp state={result.state} dispatch={result.dispatch} error={result.error} isMyTurn={result.isMyTurn} onExit={onLeave} p2p={ctx} />;
 }
@@ -307,29 +327,73 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
     setScreen('menu');
   }
 
-  const nameColorFields = (
-    <>
-      <div className="flex flex-col gap-1">
-        <label className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Your name</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={20} className={INPUT} />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Color</label>
-        <div className="flex gap-1.5">
-          {PALETTE.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setColor(c)}
-              aria-label={`Choose color ${c}`}
-              className={`h-6 w-6 rounded-full border-2 transition ${color === c ? 'border-hx-ink scale-110' : 'border-transparent'}`}
-              style={{ backgroundColor: c }}
-            />
-          ))}
+  const [joinLobbyPreview, setJoinLobbyPreview] = useState<LobbyPlayerInfo[]>([]);
+  const [joinLobbyProbeBusy, setJoinLobbyProbeBusy] = useState(false);
+  const [joinLobbyProbeResolvedCode, setJoinLobbyProbeResolvedCode] = useState('');
+  const joinProbeCode = useMemo(() => {
+    if (screen !== 'join-setup') return '';
+    const code = normalizeRoomCode(roomCodeInput);
+    return isPlausibleRoomCode(code) ? code : '';
+  }, [screen, roomCodeInput]);
+
+  useEffect(() => {
+    if (!joinProbeCode) return;
+    let cancelled = false;
+    setJoinLobbyProbeResolvedCode('');
+    const t = setTimeout(() => {
+      if (!cancelled) setJoinLobbyProbeBusy(true);
+      void probeLobby(joinProbeCode)
+        .then((players) => {
+          if (!cancelled) setJoinLobbyPreview(players);
+        })
+        .catch(() => {
+          // Keep last known preview on transient probe failures.
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setJoinLobbyProbeBusy(false);
+            setJoinLobbyProbeResolvedCode(joinProbeCode);
+          }
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [joinProbeCode]);
+
+  function renderNameColorFields(options?: { disabledColors?: ReadonlySet<string> }) {
+    const disabledColors = options?.disabledColors ?? new Set<string>();
+    return (
+      <>
+        <div className="flex flex-col gap-1">
+          <label className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Your name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={20} className={INPUT} />
         </div>
-      </div>
-    </>
-  );
+        <div className="flex flex-col gap-1">
+          <label className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Color</label>
+          <div className="flex gap-1.5">
+            {PALETTE.map((c) => {
+              const disabled = disabledColors.has(c.toLowerCase());
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setColor(c)}
+                  aria-label={`Choose color ${c}`}
+                  className={`h-6 w-6 rounded-full border-2 transition ${
+                    color === c ? 'border-hx-ink scale-110' : 'border-transparent'
+                  } ${disabled ? 'cursor-not-allowed opacity-35 saturate-50' : ''}`}
+                  style={{ backgroundColor: c }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </>
+    );
+  }
 
   if (screen === 'menu') {
     return (
@@ -361,7 +425,7 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
       <CenteredScreen>
         <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
           <h2 className="font-display text-xl font-bold text-hx-ink">🏰 Host a room</h2>
-          {nameColorFields}
+          {renderNameColorFields()}
           <button type="button" onClick={() => setScreen('host-room')} className={BTN_PRIMARY}>
             Create Room
           </button>
@@ -393,7 +457,13 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
 
   if (screen === 'join-setup') {
     const trimmedCode = normalizeRoomCode(roomCodeInput);
-    const canJoin = isPlausibleRoomCode(trimmedCode) && name.trim().length > 0;
+    const rosterPreview = joinProbeCode ? joinLobbyPreview : [];
+    const takenColors = new Set(rosterPreview.map((p) => p.color.toLowerCase()));
+    const normalizedName = name.trim().toLowerCase();
+    const nameTaken = !!normalizedName && rosterPreview.some((p) => p.name.trim().toLowerCase() === normalizedName);
+    const selectedColorTaken = takenColors.has(color.toLowerCase());
+    const probeReady = joinProbeCode.length > 0 && !joinLobbyProbeBusy && joinLobbyProbeResolvedCode === joinProbeCode;
+    const canJoin = isPlausibleRoomCode(trimmedCode) && name.trim().length > 0 && probeReady && !nameTaken && !selectedColorTaken;
     return (
       <CenteredScreen>
         <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
@@ -408,7 +478,16 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
               className={`${INPUT} font-mono uppercase tracking-[0.3em]`}
             />
           </div>
-          {nameColorFields}
+          {renderNameColorFields({ disabledColors: takenColors })}
+          <p className="text-[11px] text-hx-ink-faint">
+            {joinLobbyProbeBusy
+              ? 'Checking room roster…'
+              : joinLobbyProbeResolvedCode !== joinProbeCode
+                ? 'Waiting for room roster…'
+              : `${rosterPreview.length} player${rosterPreview.length === 1 ? '' : 's'} currently in room.`}
+          </p>
+          {nameTaken && <p className="text-xs text-hx-blood">That name is already taken in this room.</p>}
+          {selectedColorTaken && <p className="text-xs text-hx-blood">That color is already taken in this room.</p>}
           <button
             type="button"
             disabled={!canJoin}
