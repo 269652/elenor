@@ -109,7 +109,11 @@ export interface UseP2PHostCallbacks {
 }
 
 const MIN_PLAYERS = 2;
-const MAX_PLAYERS = 6;
+// [DEFAULT — direct request: "add a 'Public' switch when hosting a P2P room .. lists the room
+// publicly"] Exported so the public-lobby heartbeat (hooks/use-public-lobby.ts, called from
+// components/p2p/P2PApp.tsx's HostLobby) can report the room's real capacity instead of a
+// hardcoded duplicate of this number.
+export const MAX_PLAYERS = 6;
 const VOICE_RETRY_INTERVAL_MS = 2000;
 const VOICE_CALL_STREAM_TIMEOUT_MS = 8000;
 

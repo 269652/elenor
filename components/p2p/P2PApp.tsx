@@ -12,17 +12,20 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { GameBoardApp } from '@/components/GameBoardApp';
 import { BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
-import { useP2PHost, type P2PHostPhase } from '@/hooks/use-p2p-host';
+import { useP2PHost, MAX_PLAYERS, type P2PHostPhase } from '@/hooks/use-p2p-host';
 import { useP2PJoin, type P2PJoinPhase } from '@/hooks/use-p2p-join';
+import { usePublicLobbyListing } from '@/hooks/use-public-lobby';
 import { isPlausibleRoomCode, normalizeRoomCode, type LobbyPlayerInfo } from '@/lib/webrtc/protocol';
 import { probeLobby, type LobbyProbeResult } from '@/lib/webrtc/peer-room';
 import { clearHostSession, clearJoinSession, loadHostSession, loadJoinSession, saveJoinSession } from '@/lib/webrtc/persistence';
 import { loadSavedGames, type SavedGame } from '@/lib/savedGames';
+import { IosSwitch } from '@/components/IosSwitch';
 import type { PlayerId } from '@/engine';
 import type { P2PRoomContext } from './types';
 import { ShareRoomCode } from './ShareRoomCode';
 import { ResumeHostLobby } from './ResumeHostLobby';
 import { ResumeJoinLobby } from './ResumeJoinLobby';
+import { BrowsePublicLobbies } from './BrowsePublicLobbies';
 
 const PALETTE = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316'];
 const DEFAULT_NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank'];
@@ -105,6 +108,21 @@ function HostLobby({
    *  same as that top-level menu screen's own "← Back" already does (see exitP2P in P2PApp). */
   onMainMenu: () => void;
 }) {
+  // [DEFAULT — direct request: "add a 'Public' switch when hosting a P2P room which lists the
+  // room publicly"] Off by default — a room is only discoverable by strangers if the host
+  // deliberately opts in; the existing "share the code" flow already covers the common case of
+  // playing with people you actually know. See hooks/use-public-lobby.ts for the heartbeat this
+  // toggle drives, and lib/publicLobbyStore.ts for the server side.
+  const [isPublic, setIsPublic] = useState(false);
+  const hostEntry = hostState.players.find((p) => p.isHost);
+  usePublicLobbyListing({
+    isPublic,
+    roomCode: hostState.roomCode,
+    hostName: hostEntry?.name ?? 'Host',
+    playerCount: hostState.players.length,
+    maxPlayers: MAX_PLAYERS,
+  });
+
   return (
     <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-4`}>
       <div className="flex flex-col gap-1">
@@ -112,6 +130,11 @@ function HostLobby({
         <p className="text-sm text-hx-ink-dim">Everyone connects directly to your browser over WebRTC — no server, no account needed.</p>
       </div>
       <ShareRoomCode roomCode={hostState.roomCode} />
+      <IosSwitch
+        checked={isPublic}
+        onChange={setIsPublic}
+        label={isPublic ? '🌐 Public — listed for anyone to find and join' : '🔒 Private — only joinable by room code'}
+      />
       <div className="flex flex-col gap-2">
         <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Players ({hostState.players.length}/6)</span>
         <LobbyRoster players={hostState.players} />
@@ -316,7 +339,10 @@ function P2PJoinRoom({
 // 'resume-setup' is the new "pick which saved P2P game to resume" screen, reached from the menu
 // — distinct from 'host-setup' (which collects name/color for a FRESH room) since resuming a save
 // needs neither, the identities all come from the save itself once the host claims a seat.
-type Screen = 'menu' | 'host-setup' | 'host-room' | 'join-setup' | 'join-room' | 'resume-setup';
+// [DEFAULT — direct request: "when you click WebRTC and join there should be a button to list
+// all open lobbies"] 'browse-lobbies' is the new public-lobby directory screen — see
+// components/p2p/BrowsePublicLobbies.tsx.
+type Screen = 'menu' | 'host-setup' | 'host-room' | 'join-setup' | 'join-room' | 'resume-setup' | 'browse-lobbies';
 
 export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; onExit: () => void }) {
   // [DEFAULT — direct request: "when a client reloads the tab he should be reconnected .. if
@@ -481,6 +507,11 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
           <button type="button" onClick={() => setScreen('join-setup')} className={BTN_SECONDARY}>
             🚪 Join a room
           </button>
+          {/* [DEFAULT — direct request: "when you click WebRTC and join there should be a button
+              to list all open lobbies"] */}
+          <button type="button" onClick={() => setScreen('browse-lobbies')} className={BTN_SECONDARY}>
+            🌐 Browse public lobbies
+          </button>
           {/* [DEFAULT — direct request: "For WebRTC a client can also save the game and resume
               it later as host"] */}
           <button type="button" onClick={() => setScreen('resume-setup')} className={BTN_SECONDARY}>
@@ -490,6 +521,20 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
             ← Back
           </button>
         </div>
+      </CenteredScreen>
+    );
+  }
+
+  if (screen === 'browse-lobbies') {
+    return (
+      <CenteredScreen>
+        <BrowsePublicLobbies
+          onJoin={(roomCode) => {
+            setRoomCodeInput(roomCode);
+            setScreen('join-setup');
+          }}
+          onBack={() => setScreen('menu')}
+        />
       </CenteredScreen>
     );
   }
