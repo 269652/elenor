@@ -115,6 +115,7 @@ import {
   type EndTurnAction,
   type EquipLootAction,
   type FightAction,
+  type FleeAction,
   type GameEvent,
   type GameState,
   type GatherAction,
@@ -302,6 +303,7 @@ export function resolveProductionForNewTurn(state: GameState, playerId: PlayerId
     draft.hasFoughtThisTurn = false;
     draft.hasBuiltThisTurn = false;
     draft.hasMovedThisTurn = false;
+    draft.heroCoordBeforeMoveThisTurn = null;
     draft.pendingTileDraw = null;
     draft.hasPlacedTileThisTurn = false;
 
@@ -626,6 +628,11 @@ export function applyMoveHero(state: GameState, action: MoveHeroAction): GameSta
     const p = findPlayerMut(draft, action.actorId);
     const h = heroMut(p, action.heroId);
     const destination = action.path[action.path.length - 1];
+    // [DEFAULT — direct request: "when the hero flees he gets force moved back to the tile he
+    // was before"] Snapshot BEFORE overwriting h.position — this is applyFlee's only source for
+    // "where does fleeing send the hero back to." Overwritten every time a hero moves, which is
+    // exactly right: fleeing only ever means "undo THIS turn's move," not some earlier one.
+    draft.heroCoordBeforeMoveThisTurn = h.position;
     h.position = destination;
     draft.hasMovedThisTurn = true;
     pushEvent(draft, action.actorId, 'HeroMoved', { path: action.path, cost: check.totalCost, heroId: h.id });
@@ -709,7 +716,12 @@ function applyUtilityEffect(draft: GameState, player: Player, hero: HeroState, r
   }
 }
 
-// ── Phase 3 — Gather ─────────────────────────────────────────────────────────────────────────
+// ── Phase 4 — Gather ─────────────────────────────────────────────────────────────────────────
+// [DEFAULT — direct request: "swap gather and fight phase"] Still defined here, textually before
+// the Fight section below, purely for historical/diff-locality reasons — the Phase enum (types.ts)
+// numbers Fight (3) before Gather (4) now; nothing in this file's physical ordering needs to
+// match, since every reducer here dispatches symbolically via reducer.ts's switch, never by
+// position. See types.ts's own Phase/Action reordering for the canonical, gameplay-order version.
 
 const FORAGEABLE_TYPES = new Set(['Forest', 'Plains', 'Hills', 'Mountain', 'Desert']);
 
@@ -824,7 +836,7 @@ function require_tileResource(type: Tile['type']): ResourceType {
   return r;
 }
 
-// ── Phase 4 — Fight ──────────────────────────────────────────────────────────────────────────
+// ── Phase 3 — Fight ──────────────────────────────────────────────────────────────────────────
 
 export function applyFight(state: GameState, action: FightAction): GameState {
   requireCurrentPlayer(state, action.actorId);
@@ -1060,6 +1072,64 @@ function applyTameVolcano(state: GameState, action: Extract<FightAction, { comba
       curseCardId,
       lootCardId,
       goldGained: outcome.win ? 5 : 0,
+    });
+  });
+}
+
+/** [DEFAULT — direct request: "the hero should be able to flee from strong monsters ... when
+ *  the hero flees he gets force moved back to the tile he was before without being able to
+ *  gather its resources"] The escape hatch for a HeroVsMonster encounter — Ruins Den or pending
+ *  Door monster, the same two sources applyFightMonster resolves (see its own doc comment). No
+ *  dice, no reward, no damage: fleeing is always safe, its entire cost is giving back the move
+ *  that got the hero here (see heroCoordBeforeMoveThisTurn's doc comment in types.ts) — which,
+ *  now that Fight runs before Gather (this file's Phase enum swap), also forfeits whatever the
+ *  hero would have gathered from this tile this turn.
+ *
+ *  Deliberately does NOT set hasFoughtThisTurn — fleeing isn't a combat resolution, so it
+ *  doesn't spend the turn's one discretionary Fight-phase action (applyFight's own
+ *  isPendingDoorMonster exemption comment explains why a Door monster is exempt from that cap in
+ *  the first place; fleeing one is exempt for the same reason — it was forced on the hero, not
+ *  chosen). Not gated on hasFoughtThisTurn either: a hero who already fought something else this
+ *  turn can still flee a separately-pending Door monster, same as they could still fight it. */
+export function applyFlee(state: GameState, action: FleeAction): GameState {
+  requireCurrentPlayer(state, action.actorId);
+  requirePhase(state, Phase.Fight);
+  const player = findPlayer(state, action.actorId);
+  const hero = resolveHero(player, action.heroId);
+
+  const doorPending = state.pendingDoorMonster;
+  const fleeingDoorMonster = !!doorPending && doorPending.heroId === hero.id && sameCoord(hero.position, doorPending.coord);
+  const tile = tileAt(state, hero.position);
+  const fleeingRuinsMonster = !fleeingDoorMonster && !!tile && tile.type === 'Ruins' && tile.monsterDenCardId !== null;
+  if (!fleeingDoorMonster && !fleeingRuinsMonster) {
+    throw new IllegalActionError('There is no monster here to flee from');
+  }
+  const fallbackCoord = state.heroCoordBeforeMoveThisTurn;
+  if (!fallbackCoord) {
+    throw new IllegalActionError('The hero did not move onto this tile this turn — there is nowhere to flee back to');
+  }
+
+  return produce(state, (draft) => {
+    const p = findPlayerMut(draft, action.actorId);
+    const h = heroMut(p, action.heroId);
+    const fledFrom = h.position;
+    h.position = fallbackCoord;
+
+    if (fleeingDoorMonster) {
+      // Same discard-back-to-the-door-deck bookkeeping as a resolved fight (win or lose) — the
+      // encounter is over either way, it's just that this hero never fought it. A Ruins Den
+      // monster, by contrast, is left untouched: fleeing doesn't defeat it, it's still guarding
+      // the Den for whoever visits next, exactly like simply never engaging it always has been.
+      const monster = getMonsterById(doorPending!.monsterCardId);
+      draft.pendingDoorMonster = null;
+      draft.doorDeck.discardPile = [...draft.doorDeck.discardPile, { kind: 'Monster', monster }];
+    }
+
+    pushEvent(draft, action.actorId, 'HeroFled', {
+      heroId: h.id,
+      from: fledFrom,
+      to: fallbackCoord,
+      source: fleeingDoorMonster ? 'Door' : 'RuinsDen',
     });
   });
 }

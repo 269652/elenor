@@ -15,6 +15,7 @@ import {
   applyEndTurn,
   applyEquipLoot,
   applyFight,
+  applyFlee,
   applyGather,
   applyLevelUpHero,
   applyMoveHero,
@@ -33,10 +34,12 @@ export function applyAction(state: GameState, action: Action): GameState {
       return applyPlaceTile(state, action);
     case 'MoveHero':
       return applyMoveHero(state, action);
-    case 'Gather':
-      return applyGather(state, action);
     case 'Fight':
       return applyFight(state, action);
+    case 'Flee':
+      return applyFlee(state, action);
+    case 'Gather':
+      return applyGather(state, action);
     case 'Build':
       return applyBuild(state, action);
     case 'DeploySoldiers':

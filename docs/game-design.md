@@ -48,7 +48,8 @@ don't loot themselves.
 
 Every active player's turn moves through six phases, always in this order, always using these
 names: **Phase 0 — Production**, **Phase 1 — Draw & Place Tile**, **Phase 2 — Move Hero**,
-**Phase 3 — Gather**, **Phase 4 — Fight**, **Phase 5 — Build**.
+**Phase 3 — Fight**, **Phase 4 — Gather**, **Phase 5 — Build**. *(Fight and Gather swapped places
+post-launch — see the note at the end of Phase 3 below for why.)*
 
 **Phase 0 — Production.** The turn opens with no decisions at all — it's the payoff for
 everything built so far. Every tile the active player owns that has a resource-producing
@@ -82,23 +83,28 @@ movement across water, and so on). The decision here is where the hero is going 
 rest of the turn — toward a Monster Den to fight, toward a rival's hero for a risky duel, or
 staying home to defend. If the hero's move ends somewhere it has never been before, a Door card
 turns over the instant the move resolves — see §6 — which can hand the player a small windfall on
-the spot, or a monster fight that's now waiting for them in Phase 4 whether they wanted one or not.
+the spot, or a monster that the very next phase confronts them with, whether they wanted one or not.
 
-**Phase 3 — Gather.** Once the hero has arrived somewhere, manual resource-gathering actions
-become available at its current tile — looting a Ruins tile, foraging on the terrain the hero is
-standing on, and similar hands-on actions that Production alone doesn't cover. This is the
-hero's chance to top up the stockpile in ways a passive building can't.
-
-**Phase 4 — Fight.** This is the hero's phase, and the Munchkin half of the game lives in it.
+**Phase 3 — Fight.** This is the hero's phase, and the Munchkin half of the game lives in it.
 Depending on where the hero is standing, the active player may resolve a **hero vs. Monster**
 encounter on a Ruins/Dungeon tile, a **hero vs. rival hero** duel or backstab if another hero is on
 the same tile, or a **Volcano tame** — one of those, at most, per turn. A player isn't forced into a
-fight just because one is available, but skipping a winnable fight usually means skipping the XP and
-loot that would have come with it. The one exception to "not forced": a Monster that turned up behind
-a door in Phase 2 (see §6) has to be fought here, on top of anything else, before the turn can move on
-— that one doesn't count against the once-per-turn limit above, and doesn't wait for permission.
-Territory battles are deliberately *not* here any more: armies fight in Phase 5, when they march (see
-§6).
+discretionary Ruins Den fight just because one is available, but skipping a winnable fight usually
+means skipping the XP and loot that would have come with it. A Monster that turned up behind a door
+in Phase 2 (see §6) is a different story: it has to be *resolved* here, on top of anything else,
+before the turn can move on — fought, or **fled**. Fleeing sends the hero back to wherever it was
+standing before this turn's move, which is *why Fight now runs before Gather*: a hero who flees (a
+Door monster, or a Ruins Den it just walked onto) is no longer standing on that tile once Gather
+opens, forfeiting whatever it would have gathered there this turn. Neither a fight nor a flee counts
+against the once-per-turn discretionary-combat limit above when it's the mandatory Door encounter
+being resolved. Territory battles are deliberately *not* here any more: armies fight in Phase 5, when
+they march (see §6).
+
+**Phase 4 — Gather.** Once the hero has arrived somewhere — and survived, or fled, whatever was
+waiting for it — manual resource-gathering actions become available at its current tile: looting a
+Ruins tile, foraging on the terrain the hero is standing on, and similar hands-on actions that
+Production alone doesn't cover. This is the hero's chance to top up the stockpile in ways a passive
+building can't — assuming it's still standing on the tile to do it.
 
 **Phase 5 — Build.** The turn closes with the spending phase: resources banked from Production and
 Gather get converted into a building on an owned tile, or into leveling up the hero, or into new
@@ -257,8 +263,10 @@ before, *anywhere on the map*, something is behind the door. It's one shuffled p
 cards and Utility cards together, on purpose — exactly how the tabletop game it's borrowing the idea
 from shuffles its own Door pile, so opening one is genuine uncertainty about whether you're walking
 into a fight or a windfall. A Monster card means exactly what it sounds like: the same fight as a
-Ruins Den, same dice, same rewards, except this one isn't optional and isn't waiting for you to come
-back later — it has to be resolved before the turn can end, full stop. A Utility card resolves on the
+Ruins Den, same dice, same rewards, except this one isn't a free skip and isn't waiting for you to
+come back later — it has to be *resolved* before the turn can end, full stop, fought or **fled** (see
+§3's Phase 3 note — fleeing has its own cost, so this still isn't free, just no longer a guaranteed
+fight). A Utility card resolves on the
 spot, no dice involved: a handful of Wood or Meat, a scratch or a quiet heal, a nudge of XP, or —
 Munchkin's classic "small treasure, no monster" beat — a free Loot card draw with no fight attached at
 all. Sometimes it's nothing but flavor text, because not every door needs to matter mechanically to be

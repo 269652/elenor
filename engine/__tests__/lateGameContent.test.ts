@@ -54,6 +54,7 @@ function fixtureState(players: Player[], tiles: Tile[], overrides: Partial<GameS
     hasFoughtThisTurn: false,
     hasBuiltThisTurn: false,
     hasMovedThisTurn: false,
+    heroCoordBeforeMoveThisTurn: null,
     ...overrides,
   };
 }
@@ -285,8 +286,9 @@ describe('Barracks upgrade tiers', () => {
         building: { id: 'b-1', type: 'Barracks', coord: barracksCoord, ownerId: 'p1', tier },
       });
       // accumulateTileProduction fires on ENTERING Phase.Gather (not leaving it) — start one
-      // phase earlier so AdvancePhase below actually crosses that boundary.
-      return fixtureState([p1], tiles, { currentPhase: Phase.MoveHero, hasMovedThisTurn: true, roundNumber: 20 });
+      // phase earlier (Fight, now that Fight/Gather swapped places — see types.ts's Phase enum)
+      // so AdvancePhase below actually crosses that boundary.
+      return fixtureState([p1], tiles, { currentPhase: Phase.Fight, hasMovedThisTurn: true, roundNumber: 20 });
     }
     const tier1After = applyAction(withOwnedTiles(1), { type: 'AdvancePhase', actorId: 'p1' });
     const tier3After = applyAction(withOwnedTiles(3), { type: 'AdvancePhase', actorId: 'p1' });

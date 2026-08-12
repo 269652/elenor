@@ -55,6 +55,7 @@ function fixtureState(players: ReturnType<typeof makePlayer>[], overrides: Parti
     hasFoughtThisTurn: false,
     hasBuiltThisTurn: false,
     hasMovedThisTurn: false,
+    heroCoordBeforeMoveThisTurn: null,
     ...overrides,
   };
 }

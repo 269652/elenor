@@ -70,6 +70,7 @@ function fixtureState(players: Player[], tiles: Tile[], overrides: Partial<GameS
     hasFoughtThisTurn: false,
     hasBuiltThisTurn: false,
     hasMovedThisTurn: false,
+    heroCoordBeforeMoveThisTurn: null,
     ...overrides,
   };
 }
@@ -149,8 +150,11 @@ function eventsOfType(state: GameState, type: string) {
   return state.eventLog.filter((e) => e.type === type);
 }
 
-/** Advances the active player from Phase 1 to Phase 3, where production accumulates and the
- *  road network is swept — same entry point economy.test.ts uses. */
+/** Advances the active player from Phase 1 to Phase 4 (Gather), where production accumulates
+ *  and the road network is swept — same entry point economy.test.ts uses.
+ *  [DEFAULT — direct request: "swap gather and fight phase"] Fight (now Phase 3) sits between
+ *  MoveHero and Gather — an extra AdvancePhase step through it, since a hero who never moved has
+ *  nothing to fight or flee there. */
 function advanceToGather(state: GameState): GameState {
   const actorId = state.currentPlayerId;
   expect(state.currentPhase).toBe(Phase.DrawAndPlaceTile);
@@ -159,6 +163,7 @@ function advanceToGather(state: GameState): GameState {
   // satisfies the rule the same way a real turn would.
   let s = applyAction(state, { type: 'DrawTile', actorId });
   s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> MoveHero
+  s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> Fight (nothing to fight/flee)
   s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> Gather
   expect(s.currentPhase).toBe(Phase.Gather);
   return s;

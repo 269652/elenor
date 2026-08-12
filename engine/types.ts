@@ -346,13 +346,25 @@ export interface Player {
 
 // ── 9. Turn / phase structure ───────────────────────────────────────────────────────────
 
-/** Numeric values match the canonical phase numbers 0-5. */
+/** Numeric values match the canonical phase numbers 0-5.
+ *
+ *  [DEFAULT — direct request: "swap gather and fight phase so that upon move the fight phase
+ *  starts"] Fight and Gather swapped places (Fight is now 3, Gather is now 4) so a hero who just
+ *  moved onto a new tile faces whatever's there BEFORE it has a chance to gather anything from
+ *  it — the whole point being that fleeing (see FleeAction) then genuinely costs the Gather
+ *  opportunity, not just the fight. Every other reducer/AI/UI branch on Phase symbolically
+ *  (Phase.Fight, Phase.Gather, ...), never on the raw number, so this swap needed no changes
+ *  anywhere else in engine/reducers.ts — see applyAdvancePhase's `currentPhase + 1` stepping and
+ *  its `nextPhase === Phase.Gather` production trigger, both of which re-attach themselves to
+ *  the new values automatically. The one place that DID need a manual update is
+ *  components/hud/PhaseTracker.tsx's PHASES_IN_ORDER, which drives the visual strip and isn't
+ *  derived from these numeric values. */
 export enum Phase {
   Production = 0,
   DrawAndPlaceTile = 1,
   MoveHero = 2,
-  Gather = 3,
-  Fight = 4,
+  Fight = 3,
+  Gather = 4,
   Build = 5,
 }
 
@@ -361,8 +373,8 @@ export const PHASE_LABEL: Record<Phase, string> = {
   [Phase.Production]: 'Phase 0 — Production',
   [Phase.DrawAndPlaceTile]: 'Phase 1 — Draw & Place Tile',
   [Phase.MoveHero]: 'Phase 2 — Move Hero',
-  [Phase.Gather]: 'Phase 3 — Gather',
-  [Phase.Fight]: 'Phase 4 — Fight',
+  [Phase.Fight]: 'Phase 3 — Fight',
+  [Phase.Gather]: 'Phase 4 — Gather',
   [Phase.Build]: 'Phase 5 — Build',
 };
 
@@ -479,6 +491,15 @@ export interface GameState {
    *  components/GameBoardApp.tsx's path-building flow), so this only bites a client calling
    *  the reducer directly (e.g. a modified online client hitting the Route Handler). */
   hasMovedThisTurn: boolean;
+  /** [DEFAULT — direct request: "when the hero flees he gets force moved back to the tile he
+   *  was before"] The hero's position immediately before THIS turn's MoveHeroAction overwrote
+   *  it — null on a turn where the hero hasn't moved (yet, or at all). Set by applyMoveHero,
+   *  reset to null alongside the other hasXThisTurn flags at the start of every turn
+   *  (resolveProductionForNewTurn). The only reader is applyFlee: fleeing a monster restores
+   *  hero.position to this value, which is what makes fleeing cost the Gather phase's
+   *  opportunity on the tile just moved onto — see the Phase enum's swap comment above for why
+   *  Fight now runs before Gather. */
+  heroCoordBeforeMoveThisTurn: HexCoord | null;
 }
 
 // ── 11. Actions ──────────────────────────────────────────────────────────────────────────
@@ -513,23 +534,7 @@ export interface MoveHeroAction extends BaseAction {
   viaBoat?: boolean;
 }
 
-// --- Phase 3 — Gather ----------------------------------------------------------------
-
-export type GatherKind =
-  | 'CollectResources' // own tile with a non-empty stockpile — collect into carried inventory
-  | 'Forage' // Forest/Plains/Hills/Mountain/Desert tile NOT owned by the active player
-  | 'LootRuins' // Ruins/Dungeon tile with no active Monster Den encounter pending
-  | 'Hunt' // own Forest tile with a built Hunting Lodge
-  | 'RogueSteal'; // Rogue class only — steal 1 resource from an adjacent rival-owned tile
-
-export interface GatherAction extends BaseAction {
-  type: 'Gather';
-  /** Must equal the acting hero's current position. */
-  coord: HexCoord;
-  gatherKind: GatherKind;
-}
-
-// --- Phase 4 — Fight -------------------------------------------------------------------
+// --- Phase 3 — Fight -------------------------------------------------------------------
 
 export interface FightMonsterAction extends BaseAction {
   type: 'Fight';
@@ -559,6 +564,35 @@ export interface TameVolcanoAction extends BaseAction {
 }
 
 export type FightAction = FightMonsterAction | FightHeroAction | TameVolcanoAction;
+
+/** [DEFAULT — direct request: "the hero should be able to flee from strong monsters"] Retreats
+ *  from a HeroVsMonster encounter (a Ruins Den's monsterDenCardId, or a pending Door monster —
+ *  see applyFlee in reducers.ts) instead of fighting it. No dice, no HP damage, no XP/Loot —
+ *  the entire cost is positional: the hero is force-moved back to
+ *  GameState.heroCoordBeforeMoveThisTurn, which only exists on a turn the hero actually moved
+ *  onto the tile it's fleeing from. That's what makes fleeing meaningfully different from simply
+ *  never initiating a Ruins Den fight (which costs nothing and leaves the hero free to Gather) —
+ *  fleeing un-does the move itself, forfeiting whatever the hero would otherwise have gathered
+ *  there this turn. */
+export interface FleeAction extends BaseAction {
+  type: 'Flee';
+}
+
+// --- Phase 4 — Gather ----------------------------------------------------------------
+
+export type GatherKind =
+  | 'CollectResources' // own tile with a non-empty stockpile — collect into carried inventory
+  | 'Forage' // Forest/Plains/Hills/Mountain/Desert tile NOT owned by the active player
+  | 'LootRuins' // Ruins/Dungeon tile with no active Monster Den encounter pending
+  | 'Hunt' // own Forest tile with a built Hunting Lodge
+  | 'RogueSteal'; // Rogue class only — steal 1 resource from an adjacent rival-owned tile
+
+export interface GatherAction extends BaseAction {
+  type: 'Gather';
+  /** Must equal the acting hero's current position. */
+  coord: HexCoord;
+  gatherKind: GatherKind;
+}
 
 // --- Phase 5 — Build ---------------------------------------------------------------------
 
@@ -716,8 +750,9 @@ export type Action =
   | DrawTileAction
   | PlaceTileAction
   | MoveHeroAction
-  | GatherAction
   | FightAction
+  | FleeAction
+  | GatherAction
   | BuildBuildingAction
   | LevelUpHeroAction
   | DeploySoldiersAction

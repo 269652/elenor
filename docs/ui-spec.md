@@ -165,13 +165,13 @@ Contents:
 
 ### 1.6 Fight/Combat Modal
 
-Purpose: resolve the hero's Phase 4 encounters (Variants A and B below) **and** report the territory
+Purpose: resolve the hero's Phase 3 encounters (Variants A and B below) **and** report the territory
 battle that Phase 5 marches can trigger (Variant C). One modal shell, three content variants selected
 by encounter type — kept as one component so the surrounding chrome (dice tray, resolve button,
 result banner) stays consistent and players don't have to relearn combat UI per type.
 
 Note the asymmetry introduced by the territory rework: A and B are things a player *chooses* in
-Phase 4 and confirms in the modal; C is the *consequence* of a march submitted in Phase 5, and can
+Phase 3 and confirms in the modal; C is the *consequence* of a march submitted in Phase 5, and can
 fire on a player who isn't even taking a turn.
 
 Common modal chrome:
@@ -258,7 +258,7 @@ Layout: a horizontal strip of six phase chips, in fixed order, spanning the top 
 Board:
 
 ```
-[0 Production] → [1 Draw & Place Tile] → [2 Move Hero] → [3 Gather] → [4 Fight] → [5 Build]
+[0 Production] → [1 Draw & Place Tile] → [2 Move Hero] → [3 Fight] → [4 Gather] → [5 Build]
 ```
 
 - The active phase chip is visually raised/highlighted (see active-state treatment in §4.2);
@@ -621,7 +621,7 @@ was chosen specifically to make this achievable:
   have six neighbors and keyboards have four arrows — Up/Down map to the two "north-ish"/"south-ish"
   neighbor pairs and Left/Right to the remaining two, with the mapping shown in an on-screen legend
   the first time keyboard mode is used). Enter/Space activates the currently-legal action on the
-  focused hex (place tile in Phase 1, move-target in Phase 2, gather in Phase 3, initiate fight in
+  focused hex (place tile in Phase 1, move-target in Phase 2, initiate fight in Phase 3, gather in
   Phase 4, open Build Menu in Phase 5) — i.e. the keyboard cursor's Enter action is always
   phase-contextual, matching whatever the action bar's primary button for that phase currently does.
 - **Phase-scoped tab stops**: only tiles that are legal targets for the current phase's action are

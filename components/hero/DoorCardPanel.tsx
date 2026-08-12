@@ -43,7 +43,7 @@ import {
   type Player,
   type UtilityCard,
 } from '@/engine';
-import { BTN_DANGER, PANEL } from '@/components/uiClasses';
+import { BTN_DANGER, BTN_SECONDARY, PANEL } from '@/components/uiClasses';
 
 // ── Utility catalog lookup ──────────────────────────────────────────────────────────────────
 // Mirrors engine/catalogs.ts's own getMonsterById memoization pattern — buildUtilityCatalog()
@@ -146,26 +146,42 @@ export function PendingDoorMonsterBanner({
         </div>
       </div>
       <p className="text-[11px] text-hx-ink-dim">
-        You can&rsquo;t advance past this phase — or end your turn — until this fight is resolved. It doesn&rsquo;t count against your one
-        Fight-phase action.
+        You can&rsquo;t advance past this phase — or end your turn — until this is resolved: fight it, or flee back the way you came. It
+        doesn&rsquo;t count against your one Fight-phase action either way.
       </p>
-      <button
-        type="button"
-        disabled={!canAct}
-        onClick={() =>
-          void dispatch({
-            type: 'Fight',
-            actorId: player.id,
-            combatType: 'HeroVsMonster',
-            coord: pending.coord,
-            monsterCardId: pending.monsterCardId,
-            heroId,
-          })
-        }
-        className={clsx(BTN_DANGER, 'text-center text-sm font-bold')}
-      >
-        ⚔️ Fight {monster ? monster.name : 'the Monster'}!
-      </button>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={!canAct}
+          onClick={() =>
+            void dispatch({
+              type: 'Fight',
+              actorId: player.id,
+              combatType: 'HeroVsMonster',
+              coord: pending.coord,
+              monsterCardId: pending.monsterCardId,
+              heroId,
+            })
+          }
+          className={clsx(BTN_DANGER, 'flex-1 text-center text-sm font-bold')}
+        >
+          ⚔️ Fight {monster ? monster.name : 'the Monster'}!
+        </button>
+        {/* [DEFAULT — direct request: "the hero should be able to flee from strong monsters ...
+            when the hero flees he gets force moved back to the tile he was before without being
+            able to gather its resources"] Only ever legal here — heroCoordBeforeMoveThisTurn is
+            always set for a Door monster, since it's only ever drawn as the direct consequence
+            of THIS turn's move — so no disabled/why-not state is needed the way the Ruins Den
+            Flee button below needs one. */}
+        <button
+          type="button"
+          disabled={!canAct}
+          onClick={() => void dispatch({ type: 'Flee', actorId: player.id, heroId })}
+          className={clsx(BTN_SECONDARY, 'flex-1 text-center text-sm font-bold')}
+        >
+          🏃 Flee
+        </button>
+      </div>
     </div>
   );
 }

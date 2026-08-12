@@ -13,7 +13,8 @@ Untagged prose is structural/procedural (how systems connect), derived directly 
 > wherever they conflict):** playtesting the first implementation surfaced that "tiles auto-bank
 > to the wallet in Phase 0" made buildings pure passive income with no reason to ever visit your
 > own territory. The economy was redesigned so tiles instead accumulate a **stockpile** at the
-> start of Phase 3, a hero must physically visit and **collect** it (bounded by a **carry
+> start of Gather (Phase 3 at the time of this note; renumbered Phase 4 by the later Fight/Gather
+> swap — see §5's header), a hero must physically visit and **collect** it (bounded by a **carry
 > capacity** that scales with hero level), and carried resources are either spent on the spot
 > (building on the hero's own current tile) or hauled home and **deposited** at the Capital
 > before they're spendable elsewhere. See the revised §2, §5, and §7.5 (new) below — all still
@@ -213,6 +214,25 @@ Untagged prose is structural/procedural (how systems connect), derived directly 
 >    defender earns a genuinely wider window to notice the invasion and march back, not the same
 >    three-round grace period as losing a single Farm.
 
+> **Changelog — Fight before Gather, and Flee (post-launch, supersedes §5/§6/§6.4 below wherever they
+> conflict):** the direct brief was *"the hero should be able to flee from strong monsters ... please
+> swap gather and fight phase so that upon move the fight phase starts, and when the hero flees he
+> gets force moved back to the tile he was before without being able to gather its resources."* Two
+> changes, both tagged **[DEFAULT — direct request: ...]** at the point they apply below:
+>
+> 1. **Fight and Gather swapped phase numbers** — Fight is now Phase 3, Gather is Phase 4 (§5/§6's
+>    headers). A hero who just moved onto a new tile now faces whatever's standing on it — a Ruins Den,
+>    or a freshly-drawn Door monster — before it has any chance to gather anything from that tile.
+>    Everything else about each phase's own rules is unchanged; only their order and numbering moved.
+> 2. **A new `Flee` action lets a hero retreat from a HeroVsMonster encounter** — a Ruins Den or a
+>    pending Door monster — instead of fighting it (§6.4, "Fleeing"). No dice, no reward, no damage:
+>    the hero is simply force-moved back to wherever it was standing before this turn's Move Hero
+>    action, which only exists on a turn it actually moved onto the tile it's fleeing. Before this, a
+>    Door monster was strictly mandatory — there was no way to decline one at all; fleeing is now the
+>    only way to avoid that fight. A Ruins Den fight was always discretionary (simply never engaging it
+>    cost nothing), but explicitly fleeing one now costs the tile's Gather opportunity too, thanks to
+>    change 1 above — which is the entire reason the two phases needed to swap in the first place.
+
 ---
 
 ## 1. Setup
@@ -262,7 +282,8 @@ All bonuses **[CANON]**; deal/uniqueness mechanics **[DEFAULT]**.
 
 Automatic, no player choice, and — as of the resource economy redesign — no effect on tile
 resources. **[CANON: phase name/order still fixed]** Tile production now accumulates
-automatically the instant the active player's **Phase 3** begins instead; see §2a below.
+automatically the instant the active player's **Gather phase** begins instead (Phase 4, per the
+Fight/Gather swap — see §5's header); see §2a below.
 
 **[DEFAULT — balance rework]** Phase 0 is no longer a pure no-op, though: the instant it opens for
 the active player, the engine automatically resolves two things, in this order, before advancing to
@@ -277,7 +298,7 @@ Phase 1.
    reserve, or camped on captured ground abroad) eats every round whether or not its owner remembers
    it exists.
 
-### 2a. Tile production (fires automatically at Phase 3 entry)
+### 2a. Tile production (fires automatically at Phase 4/Gather entry)
 
 For every tile the active player owns, add its yield to that **tile's own stockpile** (not the
 player's wallet — see §5 for how a hero collects it). Order matters because Windmill consumes
@@ -441,7 +462,7 @@ turn. **[DEFAULT: one-move-action-per-turn rule]**
 | Ruins/Dungeon | 1 point |
 | River, hero's player has NOT built any Dock | Impassable — cannot enter |
 | River, hero's player HAS built at least one Dock | 1 point (boat movement unlocked) |
-| Rival-owned tile | Impassable to enter/stop, EXCEPT: Rogue class may move through without stopping (pays normal cost, cannot end movement there) — **[CANON: Rogue ability]**; a hero may always move onto a rival-owned tile that contains a rival hero specifically to initiate a Phase 4 PvP duel (see §6.2), spending its normal terrain cost |
+| Rival-owned tile | Impassable to enter/stop, EXCEPT: Rogue class may move through without stopping (pays normal cost, cannot end movement there) — **[CANON: Rogue ability]**; a hero may always move onto a rival-owned tile that contains a rival hero specifically to initiate a Phase 3 PvP duel (see §6.2), spending its normal terrain cost |
 | Unowned/neutral non-River tile | 1 point, freely enterable and may be a stopping point |
 
 ### 4.3 Boat Movement
@@ -453,15 +474,23 @@ army; see §6.3b.
 
 ### 4.4 Arriving somewhere new — **[DEFAULT — Munchkin exploration layer]**
 If this turn's Move Hero action **ends** on a hex the acting hero has never stood on before, the
-engine automatically draws a Door card the instant the move resolves — before Phase 3 even opens.
-This is the trigger for the whole Munchkin exploration layer; see §6.4 for the full rules (what's in
-the deck, the three outcomes, and the mandatory-fight consequence that plays out later in Phase 4).
+engine automatically draws a Door card the instant the move resolves — before the very next phase
+even opens. This is the trigger for the whole Munchkin exploration layer; see §6.4 for the full
+rules (what's in the deck, the three outcomes, and the mandatory-encounter consequence that plays
+out immediately next, in Phase 3 — **[DEFAULT — direct request: "swap gather and fight phase so
+that upon move the fight phase starts"]** Fight now follows Move Hero directly, with no Gather in
+between — see §5/§6's headers).
 
 ---
 
-## 5. Phase 3 — Gather
+## 5. Phase 4 — Gather
 
 **[CANON: phase name; "manual resource-gathering actions ... e.g. looting a Ruins tile, foraging"]**
+**[DEFAULT — direct request: "swap gather and fight phase so that upon move the fight phase
+starts"]** Numbered 4, not 3 — Gather and Fight (§6) swapped places so a hero who just moved onto a
+new tile faces whatever's there BEFORE it has a chance to gather anything from it. This section's
+own number (§5) is unchanged; only the phase number in its title moved. See the Fight chapter's
+§6.4 "Fleeing" for why this specific ordering matters.
 
 Tile production (§2a) accumulates automatically the instant this phase begins, before the
 active player picks a Gather action. The active hero may then take exactly one Gather action
@@ -528,23 +557,28 @@ layer] expanded again** to carry the Door deck's added draw volume (§6.4) — i
 
 ---
 
-## 6. Phase 4 — Fight
+## 6. Phase 3 — Fight
 
-**[CANON: phase name; three combat types below]** A hero may engage at most one combat resolution
-per Phase 4: one Monster fight (§6.1), OR one PvP duel (§6.2), OR one Volcano tame (§6.1's special
-case). **[DEFAULT]**
+**[CANON: phase name; three combat types below]** **[DEFAULT — direct request: "swap gather and
+fight phase so that upon move the fight phase starts"]** Numbered 3, not 4 — Fight now runs
+immediately after Move Hero (Phase 2), with Gather (§5) moved to after it — see §5's header for why.
+A hero may engage at most one combat resolution per Phase 3: one Monster fight (§6.1), OR one PvP
+duel (§6.2), OR one Volcano tame (§6.1's special case). **[DEFAULT]**
 
-**[DEFAULT — Munchkin exploration layer]** A **mandatory Door-monster fight is exempt from that
+**[DEFAULT — Munchkin exploration layer]** A **mandatory Door-monster encounter is exempt from that
 once-per-turn cap** — see §6.4. It's forced on the hero by exploration, not chosen, so it doesn't
 compete with the turn's one discretionary combat resolution; a hero can resolve a chosen fight from
-the paragraph above AND a pending Door monster in the same Phase 4. A pending Door monster also
-blocks the turn from leaving Phase 4 or ending at all until it's fought — §6.4 has the full rule.
+the paragraph above AND a pending Door monster in the same Phase 3. A pending Door monster also
+blocks the turn from leaving Phase 3 or ending at all until it's resolved — fought **or fled**
+(**[DEFAULT — direct request: "the hero should be able to flee from strong monsters"]** see §6.4)
+— §6.4 has the full rule.
 
-**[DEFAULT — territory rework]** Army vs Territory is **no longer a Phase-4 action at all** — it is
-not one of the things this once-per-turn limit is choosing between, and there is no "declare an
-attack" step anywhere in Phase 4. Territory battles happen in **Phase 5**, on contact, when Soldiers
-march onto a hex somebody else is holding. §6.3 stays in this chapter because it is still combat and
-still shares the dice conventions above, but read it as a Phase-5 rule.
+**[DEFAULT — territory rework]** Army vs Territory is **no longer something declared from this
+phase at all** — it is not one of the things this once-per-turn limit is choosing between, and
+there is no "declare an attack" step anywhere in this phase. Territory battles happen in **Phase
+5**, on contact, when Soldiers march onto a hex somebody else is holding. §6.3 stays in this
+chapter because it is still combat and still shares the dice conventions above, but read it as a
+Phase-5 rule.
 
 ### 6.1 Hero vs Monster
 
@@ -668,7 +702,8 @@ MoveSoldiers(fromCoord, toCoord, count)
 
 **Requirements** (all validated by the engine; violating any of them rejects the action outright):
 
-- **Phase 5 — Build.** Not Phase 4. **[DEFAULT — territory rework]**
+- **Phase 5 — Build only.** Territory combat is never declared from the Fight phase — see the
+  territory rework note in §6's intro. **[DEFAULT — territory rework]**
 - **Free action.** It does NOT consume the turn's one Build action (§7), and the engine sets no
   once-per-turn flag for it — a border can be reinforced *and* probed in the same Phase 5, as often
   as a player has Soldiers standing in position to do it.
@@ -804,7 +839,7 @@ Consequences worth stating plainly:
 
 **Worked Example (the timeline, `TERRITORY_CLAIM_ROUNDS` = 3):** Round 6, Blue's turn, Phase 5. Blue
 marches 4 Soldiers onto Red's undefended Farm tile — `occupationSinceRound = 6`. The Farm is occupied
-but still Red's: Red's Phase 3 every round until the claim settles still accumulates its Food, and Red
+but still Red's: Red's Gather phase (Phase 4) every round until the claim settles still accumulates its Food, and Red
 still scores its VP. The claim can't land before `currentRound >= 6 + 3 = 9`, so Red gets **two full
 rounds (7 and 8)**, not just one, to march Soldiers back and fight for the Farm — say Red marches
 5 Soldiers back onto it at any point in round 7 or 8, and the §6.3 dice resolve on contact. If Red
@@ -1130,10 +1165,12 @@ second axis of value for a leveled, geared hero — is the shape this feature wa
 ### 6.4 The Door Deck — Munchkin Exploration Layer — **[DEFAULT — Munchkin exploration layer, new subsystem]**
 
 **This section covers a new system end to end.** It sits procedurally across three phases at once —
-its *trigger* fires during Phase 2 (Move Hero), its *mandatory consequence* is resolved in Phase 4
-(Fight), and its reward is the same Treasure/Loot system §9 already documents — so, like §6.3 before
-it, it lives here in the Fight chapter because the fight is the part of it that matters most, with
-cross-references to the other two phases below.
+its *trigger* fires during Phase 2 (Move Hero), its *mandatory consequence* is resolved in Phase 3
+(Fight) — **[DEFAULT — direct request: "swap gather and fight phase so that upon move the fight
+phase starts"]** immediately next, with no Gather in between any more (Fight and Gather swapped
+places; see §5/§6's headers and the Changelog) — and its reward is the same Treasure/Loot system §9
+already documents — so, like §6.3 before it, it lives here in the Fight chapter because the fight is
+the part of it that matters most, with cross-references to the other two phases below.
 
 #### The trigger — arriving somewhere new
 
@@ -1188,9 +1225,9 @@ already established.
 #### Three outcomes
 
 1. **Monster.** Sets `GameState.pendingDoorMonster = { heroId, coord, monsterCardId }` and logs a
-   `DoorCardDrawn` event. Nothing else happens immediately — see "The mandatory fight" below.
+   `DoorCardDrawn` event. Nothing else happens immediately — see "The mandatory encounter" below.
 2. **Utility.** Resolves **immediately**, right where the draw happens (no player choice, no waiting
-   for Phase 4) — a Door boon is never something the player decides whether or when to engage with.
+   for Phase 3) — a Door boon is never something the player decides whether or when to engage with.
    The effect is drawn from `UtilityEffectKind`'s small **closed set** (Data Model §6a) so that many
    flavorful cards share a handful of reducer branches instead of each needing bespoke logic:
    - `GainWood` / `GainStone` / `GainFood` / `GainOre` / `GainMeat` / `GainGold` — adds `amount`
@@ -1210,23 +1247,26 @@ already established.
 3. **Deck momentarily exhausted.** No card, no event, no encounter (see above) — vanishingly rare
    given the deck recirculates.
 
-#### The mandatory fight, and its exemption from the once-per-Phase-4 cap
+#### The mandatory encounter, and its exemption from the once-per-Phase-3 cap
 
-A drawn Monster is **not optional**. `GameState.pendingDoorMonster` being non-null for the acting
-player's hero:
+A drawn Monster is **not optional to walk away from** — but, **[DEFAULT — direct request: "the hero
+should be able to flee from strong monsters"]**, it no longer means fight-or-nothing either: it must
+be *resolved*, one way or the other, and fighting and fleeing are both resolutions.
+`GameState.pendingDoorMonster` being non-null for the acting player's hero:
 
-- **Blocks leaving Phase 4.** `applyAdvancePhase`'s Fight → Build transition is refused while it's
-  set — Phase 4 is the last chance to fight it, since phases only move forward.
+- **Blocks leaving Phase 3.** `applyAdvancePhase`'s Fight → Gather transition is refused while it's
+  set — Phase 3 is the last chance to resolve it, since phases only move forward.
 - **Blocks ending the turn at all**, from *any* phase, via the same guard
-  (`requireNoPendingDoorMonster`) that gates the Phase 4 → Build step above — an `EndTurn` shortcut
+  (`requireNoPendingDoorMonster`) that gates the Phase 3 → Gather step above — an `EndTurn` shortcut
   can't be used to walk away from an open door either.
-- **Is exempt from the "one combat resolution per Phase 4" cap** (§6's intro). It's a forced encounter
+- **Is exempt from the "one combat resolution per Phase 3" cap** (§6's intro). It's a forced encounter
   the hero didn't choose, not a discretionary one, so it doesn't compete with — and isn't blocked by —
-  a Ruins Den fight, a PvP duel, or a Volcano tame the hero also resolves that same Phase 4. A hero can
-  legally resolve **two** Monster fights in one Phase 4 if both a discretionary one and a pending Door
-  monster are on the table (see the Ruins interaction below for exactly when that happens).
+  a Ruins Den fight, a PvP duel, or a Volcano tame the hero also resolves that same Phase 3. A hero can
+  legally resolve **two** Monster fights in one Phase 3 if both a discretionary one and a pending Door
+  monster are on the table (see the Ruins interaction below for exactly when that happens). Fleeing it
+  is likewise exempt — it isn't a combat resolution at all (see below).
 
-**Resolving it** uses the *exact same action shape* a Ruins Den fight uses — `{ type: 'Fight',
+**Fighting it** uses the *exact same action shape* a Ruins Den fight uses — `{ type: 'Fight',
 combatType: 'HeroVsMonster', coord, monsterCardId }` — and the exact same dice math (§6.1's roll,
 threshold, win/lose rewards). `applyFightMonster` accepts either source and tells them apart by which
 one matches: `coord`+`monsterCardId` against the tile's `monsterDenCardId` (a Ruins Den), or against
@@ -1236,10 +1276,42 @@ Ruins Den") does **not** extend to a Door monster, because a Door card is drawn 
 hero is always already standing on it; there is no "seeing it from next door" to have a ranged option
 about.
 
-**On resolution — win or lose, either way** (unlike a Ruins Den, which only clears on a win): XP/HP/
-Loot/Bad-Stuff resolve exactly per §6.1, `pendingDoorMonster` is cleared, and the card returns to
+**On a fought resolution — win or lose, either way** (unlike a Ruins Den, which only clears on a win):
+XP/HP/Loot/Bad-Stuff resolve exactly per §6.1, `pendingDoorMonster` is cleared, and the card returns to
 `doorDeck.discardPile`. A Door monster is a passing encounter, not a permanent guard — there's nothing
 left standing on the tile afterward the way an undefeated Ruins Den keeps guarding until it's beaten.
+
+#### Fleeing — **[DEFAULT — direct request: "the hero should be able to flee from strong monsters ...
+when the hero flees he gets force moved back to the tile he was before without being able to gather
+its resources"]**
+
+`{ type: 'Flee', actorId }` is the alternative to fighting, for **either** a Ruins Den or a pending
+Door monster — the escape hatch that didn't exist before this pass. No die is rolled, nothing is won
+or lost in combat terms: the entire cost is that the hero is **force-moved back to
+`GameState.heroCoordBeforeMoveThisTurn`** — the position it was standing at before this turn's Move
+Hero action brought it to the tile it's now fleeing.
+
+**This is only legal on a tile the hero actually moved onto this turn.** `heroCoordBeforeMoveThisTurn`
+is set by `applyMoveHero` and cleared back to `null` at the start of every turn (Phase 0) — a hero who
+has simply been standing on a Ruins Den since an earlier turn, without moving this turn, has nowhere to
+flee back to, so `Flee` is rejected outright in that case. A pending Door monster never has this problem
+— it's only ever drawn as the direct consequence of *this* turn's move (§ "The trigger" above), so
+`heroCoordBeforeMoveThisTurn` is guaranteed to be set whenever one is pending.
+
+**Why this is what makes the Phase 3/Phase 4 swap matter, not just cosmetic:** under the old numbering
+(Gather before Fight), a hero could walk onto a new tile, gather whatever it had to offer, *then* decide
+whether to fight — declining cost nothing. Now Fight happens first. Simply never fighting a Ruins Den is
+still free (the hero stays put and gathers normally next phase, exactly as before) — but fleeing is a
+genuine retreat: the hero is no longer standing on the tile when Phase 4 (Gather) opens, so whatever it
+would have gathered there this turn is forfeited along with the fight. A mandatory Door monster has no
+"just don't engage" option at all — fleeing it is the *only* way to avoid the fight, and it carries the
+same forfeited-Gather cost.
+
+**On a fled Door monster:** exactly the same bookkeeping as a resolved fight — `pendingDoorMonster` is
+cleared and the card returns to `doorDeck.discardPile` — since the encounter is over either way, it's
+just that this hero never fought it. **On a fled Ruins Den:** the Den is untouched (`monsterDenCardId`
+stays set) — fleeing doesn't defeat the monster, it's still guarding the tile for whoever visits next,
+exactly like simply never engaging it always has been.
 
 #### Interaction with a Ruins Den — both exist, independently
 
@@ -1253,13 +1325,13 @@ at **any** first-visited tile — Ruins included. Landing on a Ruins tile nobody
 therefore checks *two* completely independent things at once: the Den that's been sitting there since
 the tile was placed (`tile.monsterDenCardId`, drawn from the Ruins/Monster deck), and a brand-new Door
 card (drawn from the separate Door deck, described above). These can both come up Monster — with
-**different** `monsterCardId`s, from two different decks — and if they do, Phase 4 offers the hero two
+**different** `monsterCardId`s, from two different decks — and if they do, Phase 3 offers the hero two
 distinct fights on the same hex in the same turn: the Ruins Den (discretionary, uses up the turn's one
-Fight-phase slot) and the Door monster (mandatory, exempt from that slot per the section above). Either
-may be fought first; because the Door monster is exempt from the cap the Ruins fight consumes, **both
-can be fought in the same Phase 4.** If the Door draw instead comes up Utility, it already resolved
-automatically back in Phase 2, and only the Ruins Den's own fight remains as Phase 4's one
-discretionary option.
+Fight-phase slot) and the Door monster (mandatory — or fleeable, see "Fleeing" above — exempt from that
+slot either way per the section above). Either may be fought first; because the Door monster is exempt
+from the cap the Ruins fight consumes, **both can be fought in the same Phase 3.** If the Door draw
+instead comes up Utility, it already resolved automatically back in Phase 2, and only the Ruins Den's
+own fight remains as Phase 3's one discretionary option.
 
 #### Treasure is the Loot system, expanded and doing double duty
 

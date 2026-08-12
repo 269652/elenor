@@ -82,6 +82,7 @@ function fixtureState(players: Player[], tiles: Tile[], overrides: Partial<GameS
     hasFoughtThisTurn: false,
     hasBuiltThisTurn: false,
     hasMovedThisTurn: false,
+    heroCoordBeforeMoveThisTurn: null,
     ...overrides,
   };
 }
@@ -876,6 +877,7 @@ describe('Occupier-vs-owner: every writer of militiaCount respects garrisonOwner
     // turn" reducer guard directly on the fixture rather than actually drawing one.
     const state = { ...occupiedHomeFixture(0, 2, true), currentPhase: Phase.DrawAndPlaceTile, hasPlacedTileThisTurn: true };
     let s = applyAction(state, { type: 'AdvancePhase', actorId: 'p1' }); // -> MoveHero
+    s = applyAction(s, { type: 'AdvancePhase', actorId: 'p1' }); // -> Fight (nothing to fight/flee)
     s = applyAction(s, { type: 'AdvancePhase', actorId: 'p1' }); // -> Gather (production fires)
     const barracks = tileAt(s, P1_CAPITAL)!;
     expect(barracks.militiaCount).toBe(2); // the occupier's stack is untouched

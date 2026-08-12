@@ -11,8 +11,11 @@ const PLAYERS = [
   { id: 'p2', name: 'Bob', color: '#0f0' },
 ];
 
-/** Advances the current player straight to Phase 3 (Gather) without drawing/placing/moving,
- *  so tests can inspect the tile-production-accumulation step in isolation. */
+/** Advances the current player straight to Phase 4 (Gather) without drawing/placing/moving,
+ *  so tests can inspect the tile-production-accumulation step in isolation.
+ *  [DEFAULT — direct request: "swap gather and fight phase"] Fight (now Phase 3) sits between
+ *  MoveHero and Gather — an extra AdvancePhase step through it, since a hero who never moved has
+ *  nothing to fight or flee there. */
 function advanceToGather(state: ReturnType<typeof createGame>) {
   let s = state;
   const actorId = s.currentPlayerId;
@@ -22,6 +25,7 @@ function advanceToGather(state: ReturnType<typeof createGame>) {
   // satisfies the rule the same way a real turn would.
   s = applyAction(s, { type: 'DrawTile', actorId });
   s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> MoveHero
+  s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> Fight (nothing to fight/flee)
   s = applyAction(s, { type: 'AdvancePhase', actorId }); // -> Gather (accumulation fires here)
   expect(s.currentPhase).toBe(Phase.Gather);
   return s;
@@ -40,7 +44,7 @@ function createGameWithWalkableFirstDraw(gameId: string, seedPrefix: string) {
   throw new Error(`Could not find a walkable first draw for seed prefix ${seedPrefix} after 30 attempts`);
 }
 
-describe('Resource economy: tile production accumulates at Phase 3 entry, not Phase 0', () => {
+describe('Resource economy: tile production accumulates at Gather (Phase 4) entry, not Phase 0', () => {
   it('the Capital tile stockpile is untouched right after game creation (Phase 0/1)', () => {
     const state = createGame('g1', PLAYERS, 'economy-seed-1', 'hotseat');
     const p1 = state.players.find((p) => p.id === state.currentPlayerId)!;
@@ -48,7 +52,7 @@ describe('Resource economy: tile production accumulates at Phase 3 entry, not Ph
     expect(capitalTile.stockpile.Food).toBe(0);
   });
 
-  it('the Capital tile (Plains -> Food) accumulates on entering Phase 3', () => {
+  it('the Capital tile (Plains -> Food) accumulates on entering Gather (Phase 4)', () => {
     const state = createGame('g2', PLAYERS, 'economy-seed-2', 'hotseat');
     const p1id = state.currentPlayerId;
     const afterGather = advanceToGather(state);
@@ -61,7 +65,7 @@ describe('Resource economy: tile production accumulates at Phase 3 entry, not Ph
   it('production never exceeds TILE_STOCKPILE_CAP even across many rounds', () => {
     let state = createGame('g3', PLAYERS, 'economy-seed-3', 'hotseat');
     // Cycle both players' turns repeatedly via EndTurn (skips drawing/placing/gathering —
-    // production still accumulates every time Phase 3 is entered).
+    // production still accumulates every time Gather (Phase 4) is entered).
     for (let i = 0; i < 40; i++) {
       state = advanceToGather(state);
       state = applyAction(state, { type: 'EndTurn', actorId: state.currentPlayerId });
@@ -152,14 +156,15 @@ describe('Resource economy: spend-local vs deposit-at-Capital', () => {
       players: state.players.map((p) => (p.id === actorId ? { ...p, resources: { ...p.resources, Wood: 5, Stone: 5 } } : p)),
     };
 
-    // Advance to Fight then Build. The Capital tile always carries a Town from turn 1
-    // (territory rework), so — unlike an ordinary empty tile — the only Build-phase action
-    // available there is upgrading it, not constructing something new on top of it. That's a
-    // fine substitute for exercising "carried resources pay first": tier 2 costs Food among
-    // other things, same as Farm did before this test needed rewriting. The Town's tiers run
-    // through their own bespoke path (buildingType 'Capital', CAPITAL_TIERS) rather than the
-    // generic UpgradeBuildingAction — see engine/reducers.ts's applyBuild Capital branch.
-    state = applyAction(state, { type: 'AdvancePhase', actorId }); // -> Fight
+    // Advance to Build — advanceToGather already stepped through Fight on the way here (Fight
+    // now runs BEFORE Gather), so a single AdvancePhase from Gather reaches Build directly. The
+    // Capital tile always carries a Town from turn 1 (territory rework), so — unlike an ordinary
+    // empty tile — the only Build-phase action available there is upgrading it, not constructing
+    // something new on top of it. That's a fine substitute for exercising "carried resources pay
+    // first": tier 2 costs Food among other things, same as Farm did before this test needed
+    // rewriting. The Town's tiers run through their own bespoke path (buildingType 'Capital',
+    // CAPITAL_TIERS) rather than the generic UpgradeBuildingAction — see engine/reducers.ts's
+    // applyBuild Capital branch.
     state = applyAction(state, { type: 'AdvancePhase', actorId }); // -> Build
     state = applyAction(state, { type: 'Build', actorId, buildingType: 'Capital', coord: player.capitalTile });
 

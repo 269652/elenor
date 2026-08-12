@@ -792,7 +792,7 @@ export function GameBoardApp({
               buried at the bottom of a long scrolling sidebar. */}
           {doorMonsterPendingForMe && (
             <div className="mt-3 rounded-sm border border-hx-blood/60 bg-hx-blood/15 px-2.5 py-1.5 text-xs text-hx-ink motion-safe:animate-shimmer">
-              🚪👹 A Door monster is still standing in the way — resolve it in the Fight phase before you can end this turn.
+              🚪👹 A Door monster is still standing in the way — fight it or flee in the Fight phase before you can end this turn.
             </div>
           )}
 
@@ -812,7 +812,7 @@ export function GameBoardApp({
               noTileDrawnYet
                 ? 'Draw a tile first'
                 : doorMonsterPendingForMe && state.currentPhase === Phase.Fight
-                  ? 'Fight the Door monster before leaving this phase'
+                  ? 'Fight or flee the Door monster before leaving this phase'
                   : undefined
             }
             onClick={() => {
@@ -830,7 +830,7 @@ export function GameBoardApp({
             <button
               type="button"
               disabled={!canAct || noTileDrawnYet || doorMonsterPendingForMe}
-              title={noTileDrawnYet ? 'Draw a tile first' : doorMonsterPendingForMe ? 'Fight the Door monster before ending your turn' : undefined}
+              title={noTileDrawnYet ? 'Draw a tile first' : doorMonsterPendingForMe ? 'Fight or flee the Door monster before ending your turn' : undefined}
               onClick={() => {
                 setSelectedCoord(null);
                 setPendingPath([]);
@@ -1074,14 +1074,32 @@ function PhaseActions(props: PhaseActionsProps) {
         <div className="flex flex-col gap-2">
           <PendingDoorMonsterBanner state={state} player={player} dispatch={dispatch} canAct={canAct} />
           {tile?.type === 'Ruins' && tile.monsterDenCardId && (
-            <button
-              type="button"
-              disabled={!canAct}
-              onClick={() => void dispatch({ type: 'Fight', actorId: player.id, combatType: 'HeroVsMonster', coord: hero.position, monsterCardId: tile.monsterDenCardId! })}
-              className={BTN_DANGER}
-            >
-              ⚔️ Fight the Monster here
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={!canAct}
+                onClick={() => void dispatch({ type: 'Fight', actorId: player.id, combatType: 'HeroVsMonster', coord: hero.position, monsterCardId: tile.monsterDenCardId! })}
+                className={clsx(BTN_DANGER, 'flex-1')}
+              >
+                ⚔️ Fight the Monster here
+              </button>
+              {/* [DEFAULT — direct request: "the hero should be able to flee from strong
+                  monsters ... when the hero flees he gets force moved back to the tile he was
+                  before without being able to gather its resources"] Only legal on a tile the
+                  hero actually moved onto THIS turn (heroCoordBeforeMoveThisTurn) — a Ruins Den
+                  the hero has simply been standing on since an earlier turn has nowhere to flee
+                  back to, so the button stays visible (the monster is still there either way)
+                  but disables with an explanation instead of silently doing nothing on click. */}
+              <button
+                type="button"
+                disabled={!canAct || !state.heroCoordBeforeMoveThisTurn}
+                title={state.heroCoordBeforeMoveThisTurn ? undefined : "You didn't move onto this tile this turn — nowhere to flee back to"}
+                onClick={() => void dispatch({ type: 'Flee', actorId: player.id })}
+                className={clsx(BTN_SECONDARY, 'flex-1')}
+              >
+                🏃 Flee
+              </button>
+            </div>
           )}
           {tile?.type === 'Volcano' && !tile.isTamed && (
             <button type="button" disabled={!canAct} onClick={() => void dispatch({ type: 'Fight', actorId: player.id, combatType: 'TameVolcano', coord: hero.position })} className={BTN_DANGER}>

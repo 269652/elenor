@@ -856,7 +856,10 @@ function estimateMonsterWinProbability(hero: HeroState, player: Player, monsterL
   return rollMeetsThresholdProbability(flatMod, threshold, hasExtraCombatDie(player));
 }
 
-// ── Phase 3 — Gather ─────────────────────────────────────────────────────────────────────────
+// ── Phase 4 — Gather ─────────────────────────────────────────────────────────────────────────
+// [DEFAULT — direct request: "swap gather and fight phase"] Phase enum numbers Fight (3) before
+// Gather (4) now — see engine/types.ts. decideAction's own phase switch dispatches symbolically,
+// so this section's physical position in the file needed no change, only the label.
 
 const FORAGEABLE_TYPES = new Set(['Forest', 'Plains', 'Hills', 'Mountain', 'Desert']);
 
@@ -895,7 +898,7 @@ function decideGather(state: GameState, player: Player): Action {
   return advance(player.id);
 }
 
-// ── Phase 4 — Fight ──────────────────────────────────────────────────────────────────────────
+// ── Phase 3 — Fight ──────────────────────────────────────────────────────────────────────────
 
 function decideFight(state: GameState, player: Player): Action {
   const hero = player.hero;
@@ -912,6 +915,17 @@ function decideFight(state: GameState, player: Player): Action {
     // from another fight). A Door monster is only fightable on the draw tile, so don't emit an
     // impossible HeroVsMonster action from a different coordinate.
     if (!samePos(hero.position, pending.coord)) return advance(player.id);
+    // [DEFAULT — direct request: "the hero should be able to flee from strong monsters"] Before
+    // Flee existed, a Door monster was unconditionally fought — there was no way to decline it
+    // at all. Same 0.45 win-probability bar as the discretionary Ruins Den fight below: under
+    // it, flee instead of fighting. heroCoordBeforeMoveThisTurn is always set here — a Door
+    // monster is only ever drawn as the direct result of THIS turn's move (see
+    // resolveDoorCardIfNewTile in reducers.ts) — so applyFlee always has somewhere to send the
+    // hero back to.
+    const doorMonster = getMonsterById(pending.monsterCardId);
+    if (estimateMonsterWinProbability(hero, player, doorMonster.level) < 0.45) {
+      return { type: 'Flee', actorId: player.id };
+    }
     return { type: 'Fight', actorId: player.id, combatType: 'HeroVsMonster', coord: pending.coord, monsterCardId: pending.monsterCardId };
   }
 

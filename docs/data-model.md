@@ -516,13 +516,17 @@ export interface Player {
 ## 9. Turn / phase structure
 
 ```typescript
-/** Numeric values match the canonical phase numbers 0-5. */
+/** Numeric values match the canonical phase numbers 0-5.
+ *
+ *  [DEFAULT — direct request: "swap gather and fight phase so that upon move the fight phase
+ *  starts"] Fight and Gather swapped places (Fight is now 3, Gather is now 4) — see
+ *  docs/rules-reference.md §6.4's "mandatory fight" subsection and the Flee action for why. */
 export enum Phase {
   Production = 0,
   DrawAndPlaceTile = 1,
   MoveHero = 2,
-  Gather = 3,
-  Fight = 4,
+  Fight = 3,
+  Gather = 4,
   Build = 5,
 }
 
@@ -531,8 +535,8 @@ export const PHASE_LABEL: Record<Phase, string> = {
   [Phase.Production]: 'Phase 0 — Production',
   [Phase.DrawAndPlaceTile]: 'Phase 1 — Draw & Place Tile',
   [Phase.MoveHero]: 'Phase 2 — Move Hero',
-  [Phase.Gather]: 'Phase 3 — Gather',
-  [Phase.Fight]: 'Phase 4 — Fight',
+  [Phase.Fight]: 'Phase 3 — Fight',
+  [Phase.Gather]: 'Phase 4 — Gather',
   [Phase.Build]: 'Phase 5 — Build',
 };
 ```
@@ -615,14 +619,15 @@ export interface GameState {
    *  `DoorCard`'s doc comment (§6a) for why it's a single combined deck rather than two separately
    *  drawn ones. Rules Reference §6.4. */
   doorDeck: DoorDeckState;
-  /** **Munchkin exploration layer.** A Door card came up Monster and hasn't been fought yet. Set by
-   *  `applyMoveHero` the instant a hero first sets foot on a tile; `applyAdvancePhase` refuses to
-   *  leave Phase 4 (Fight) while this is non-null for the hero it names, and `EndTurn`/`AdvancePhase`
+  /** **Munchkin exploration layer.** A Door card came up Monster and hasn't been resolved yet. Set
+   *  by `applyMoveHero` the instant a hero first sets foot on a tile; `applyAdvancePhase` refuses to
+   *  leave Phase 3 (Fight) while this is non-null for the hero it names, and `EndTurn`/`AdvancePhase`
    *  both refuse to end the turn at all while it's pending (`requireNoPendingDoorMonster`) — the
-   *  Munchkin rule that you can't just walk away from what's behind the door. Cleared by the
-   *  matching `Fight` action, win or lose alike (losing doesn't mean it's still there). Keyed by
-   *  `heroId` so two heroes (post Town-tier-4) can't collide if both somehow had one pending at once,
-   *  even though only one hero moves per turn in practice. Rules Reference §6.4. */
+   *  Munchkin rule that you can't just walk away from what's behind the door. Cleared by a matching
+   *  `Fight` action (win or lose alike) OR a `Flee` action — see the Flee action below; fleeing is
+   *  the one way to resolve it without a die roll. Keyed by `heroId` so two heroes (post
+   *  Town-tier-4) can't collide if both somehow had one pending at once, even though only one hero
+   *  moves per turn in practice. Rules Reference §6.4. */
   pendingDoorMonster: { heroId: string; coord: HexCoord; monsterCardId: string } | null;
   eventLog: GameEvent[];
   winnerId: PlayerId | null;
@@ -732,24 +737,7 @@ export interface MoveHeroAction extends BaseAction {
   viaBoat?: boolean;
 }
 
-// --- Phase 3 — Gather ----------------------------------------------------------------
-
-export type GatherKind =
-  | 'CollectResources' // own tile with a non-empty stockpile — collect into carriedResources
-  | 'Forage'      // Forest/Plains/Hills/Mountain/Desert tile NOT owned by the active player
-  | 'LootRuins'   // Ruins/Dungeon tile, Monster Den already cleared and Tile.hasBeenLooted unset —
-                  // once per tile for the whole game (balance rework pass 2)
-  | 'Hunt'        // own Forest tile with a built Hunting Lodge
-  | 'RogueSteal'; // Rogue class only — steal 1 resource from an adjacent rival-owned tile
-
-export interface GatherAction extends BaseAction {
-  type: 'Gather';
-  /** Must equal the acting hero's current position. */
-  coord: HexCoord;
-  gatherKind: GatherKind;
-}
-
-// --- Phase 4 — Fight -------------------------------------------------------------------
+// --- Phase 3 — Fight -------------------------------------------------------------------
 
 export interface FightMonsterAction extends BaseAction {
   type: 'Fight';
@@ -783,6 +771,35 @@ export type FightAction =
   | FightMonsterAction
   | FightHeroAction
   | TameVolcanoAction;
+
+/** [DEFAULT — direct request: "the hero should be able to flee from strong monsters"] Retreats
+ *  from a HeroVsMonster encounter (a Ruins Den or a pending Door monster) instead of fighting
+ *  it — no dice, no HP damage, no XP/Loot. The hero is force-moved back to
+ *  `GameState.heroCoordBeforeMoveThisTurn` (an engine-internal bookkeeping field, not part of
+ *  this minimal contract — see engine/types.ts), which only exists on a turn the hero actually
+ *  moved onto the tile it's fleeing. Since Fight now runs before Gather (see the Phase enum
+ *  above), fleeing forfeits whatever the hero would have gathered from that tile this turn too —
+ *  the whole reason the two phases swapped. See `applyFlee` in `engine/reducers.ts`. */
+export interface FleeAction extends BaseAction {
+  type: 'Flee';
+}
+
+// --- Phase 4 — Gather ----------------------------------------------------------------
+
+export type GatherKind =
+  | 'CollectResources' // own tile with a non-empty stockpile — collect into carriedResources
+  | 'Forage'      // Forest/Plains/Hills/Mountain/Desert tile NOT owned by the active player
+  | 'LootRuins'   // Ruins/Dungeon tile, Monster Den already cleared and Tile.hasBeenLooted unset —
+                  // once per tile for the whole game (balance rework pass 2)
+  | 'Hunt'        // own Forest tile with a built Hunting Lodge
+  | 'RogueSteal'; // Rogue class only — steal 1 resource from an adjacent rival-owned tile
+
+export interface GatherAction extends BaseAction {
+  type: 'Gather';
+  /** Must equal the acting hero's current position. */
+  coord: HexCoord;
+  gatherKind: GatherKind;
+}
 
 // --- Phase 5 — Build ---------------------------------------------------------------------
 
@@ -975,8 +992,9 @@ export type Action =
   | DrawTileAction
   | PlaceTileAction
   | MoveHeroAction
-  | GatherAction
   | FightAction
+  | FleeAction
+  | GatherAction
   | BuildBuildingAction
   | LevelUpHeroAction
   | DeploySoldiersAction

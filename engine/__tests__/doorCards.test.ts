@@ -78,6 +78,7 @@ function fixtureState(players: Player[], tiles: Tile[], overrides: Partial<GameS
     hasFoughtThisTurn: false,
     hasBuiltThisTurn: false,
     hasMovedThisTurn: false,
+    heroCoordBeforeMoveThisTurn: null,
     ...overrides,
   };
 }
@@ -373,7 +374,7 @@ describe('The mandatory Door-monster fight gate', () => {
     expect(resolved.pendingDoorMonster).toBeNull();
 
     const advanced = applyAction(resolved, { type: 'AdvancePhase', actorId: 'p1' });
-    expect(advanced.currentPhase).toBe(Phase.Build);
+    expect(advanced.currentPhase).toBe(Phase.Gather);
 
     const ended = applyAction(resolved, { type: 'EndTurn', actorId: 'p1' });
     expect(ended.eventLog.some((e) => e.type === 'TurnEnded')).toBe(true);
@@ -385,10 +386,119 @@ describe('The mandatory Door-monster fight gate', () => {
     expect(resolved.pendingDoorMonster).toBeNull();
 
     const advanced = applyAction(resolved, { type: 'AdvancePhase', actorId: 'p1' });
-    expect(advanced.currentPhase).toBe(Phase.Build);
+    expect(advanced.currentPhase).toBe(Phase.Gather);
 
     const ended = applyAction(resolved, { type: 'EndTurn', actorId: 'p1' });
     expect(ended.eventLog.some((e) => e.type === 'TurnEnded')).toBe(true);
+  });
+});
+
+// ── 4a. Flee — [DEFAULT — direct request: "the hero should be able to flee from strong monsters
+// ... when the hero flees he gets force moved back to the tile he was before without being able
+// to gather its resources"] ────────────────────────────────────────────────────────────────────
+
+describe('Flee: a Door monster', () => {
+  // pendingFightState (§4 above) never sets heroCoordBeforeMoveThisTurn — every test here
+  // overrides it explicitly to SPAWN, simulating "the hero moved SPAWN -> NEW_TILE this turn."
+  function fleeableState(opts: Parameters<typeof pendingFightState>[0]) {
+    const built = pendingFightState(opts);
+    return { ...built, state: { ...built.state, heroCoordBeforeMoveThisTurn: SPAWN } };
+  }
+
+  it('force-moves the hero back and clears pendingDoorMonster, same as a resolved fight', () => {
+    const { state, monster, heroId } = fleeableState({ outcome: 'win' });
+    const fled = applyAction(state, { type: 'Flee', actorId: 'p1', heroId });
+    expect(fled.pendingDoorMonster).toBeNull();
+    expect(fled.players[0].hero.position).toEqual(SPAWN);
+    expect(fled.doorDeck.discardPile).toHaveLength(1);
+    expect(fled.doorDeck.discardPile[0]).toMatchObject({ kind: 'Monster', monster });
+  });
+
+  it('costs no HP and grants no XP/Loot — fleeing is always safe', () => {
+    const { state, heroId } = fleeableState({ outcome: 'lose' }); // APEX_MONSTER — would guarantee a loss if fought
+    const fled = applyAction(state, { type: 'Flee', actorId: 'p1', heroId });
+    const hero = fled.players[0].hero;
+    expect(hero.hp).toBe(state.players[0].hero.hp);
+    expect(hero.xp).toBe(0);
+    expect(hero.inventory).toHaveLength(0);
+    expect(hero.activeCurses).toHaveLength(0);
+  });
+
+  it('does NOT set hasFoughtThisTurn — fleeing is not a combat resolution', () => {
+    const { state, heroId } = fleeableState({ outcome: 'win' });
+    const fled = applyAction(state, { type: 'Flee', actorId: 'p1', heroId });
+    expect(fled.hasFoughtThisTurn).toBe(false);
+  });
+
+  it('is legal even if the hero already fought something else this turn, same exemption fighting it has', () => {
+    const { state, heroId } = fleeableState({ outcome: 'win', hasFoughtThisTurn: true });
+    const fled = applyAction(state, { type: 'Flee', actorId: 'p1', heroId });
+    expect(fled.pendingDoorMonster).toBeNull();
+    expect(fled.hasFoughtThisTurn).toBe(true); // was already true — Flee didn't touch it either way
+  });
+
+  it('after fleeing, AdvancePhase/EndTurn work normally again', () => {
+    const { state, heroId } = fleeableState({ outcome: 'win' });
+    const fled = applyAction(state, { type: 'Flee', actorId: 'p1', heroId });
+    const advanced = applyAction(fled, { type: 'AdvancePhase', actorId: 'p1' });
+    expect(advanced.currentPhase).toBe(Phase.Gather);
+    const ended = applyAction(fled, { type: 'EndTurn', actorId: 'p1' });
+    expect(ended.eventLog.some((e) => e.type === 'TurnEnded')).toBe(true);
+  });
+
+  it('rejects fleeing outside the Fight phase', () => {
+    const { state, heroId } = fleeableState({ outcome: 'win', currentPhase: Phase.Gather });
+    expect(() => applyAction(state, { type: 'Flee', actorId: 'p1', heroId })).toThrow(IllegalActionError);
+  });
+
+  it('rejects fleeing when heroCoordBeforeMoveThisTurn is null — nowhere to flee back to', () => {
+    // Deliberately NOT using fleeableState here — heroCoordBeforeMoveThisTurn stays at
+    // fixtureState's default (null), simulating a hero that never moved this turn at all.
+    const { state, heroId } = pendingFightState({ outcome: 'win' });
+    expect(() => applyAction(state, { type: 'Flee', actorId: 'p1', heroId })).toThrow(IllegalActionError);
+    expect(() => applyAction(state, { type: 'Flee', actorId: 'p1', heroId })).toThrow(/nowhere to flee/i);
+  });
+});
+
+describe('Flee: a Ruins Den monster', () => {
+  const RUINS_TILE: Tile = makeTile({ coord: NEW_TILE, type: 'Ruins', ownerId: null, monsterDenCardId: SOME_MONSTER.id });
+
+  function ruinsFightState(heroCoordBeforeMoveThisTurn: HexCoord | null): GameState {
+    const hero = makeHero({ ownerId: 'p1', position: NEW_TILE, visitedTiles: [hexKey(SPAWN), hexKey(NEW_TILE)] });
+    const p1 = makePlayer({ id: 'p1', capitalTile: SPAWN, ownedTiles: [SPAWN], hero });
+    const tiles: Tile[] = [makeTile({ coord: SPAWN, type: 'Plains', ownerId: 'p1' }), RUINS_TILE];
+    return fixtureState([p1], tiles, { currentPhase: Phase.Fight, heroCoordBeforeMoveThisTurn });
+  }
+
+  it('force-moves the hero back but leaves the Den untouched — fleeing does not defeat the monster', () => {
+    const state = ruinsFightState(SPAWN);
+    const fled = applyAction(state, { type: 'Flee', actorId: 'p1' });
+    expect(fled.players[0].hero.position).toEqual(SPAWN);
+    expect(fled.map[hexKey(NEW_TILE)]?.monsterDenCardId).toBe(SOME_MONSTER.id); // still guarding
+    expect(fled.pendingDoorMonster).toBeNull(); // was never set — untouched, not newly cleared
+  });
+
+  it('does not touch doorDeck — this encounter never came from the Door deck', () => {
+    const state = ruinsFightState(SPAWN);
+    const fled = applyAction(state, { type: 'Flee', actorId: 'p1' });
+    expect(fled.doorDeck.discardPile).toHaveLength(0);
+  });
+
+  it('rejects fleeing a Ruins Den the hero has simply been standing on since an earlier turn', () => {
+    const state = ruinsFightState(null); // hero didn't move this turn
+    expect(() => applyAction(state, { type: 'Flee', actorId: 'p1' })).toThrow(IllegalActionError);
+    expect(() => applyAction(state, { type: 'Flee', actorId: 'p1' })).toThrow(/nowhere to flee/i);
+  });
+
+  it('rejects fleeing a tile with no monster on it at all', () => {
+    const hero = makeHero({ ownerId: 'p1', position: SPAWN, visitedTiles: [hexKey(SPAWN)] });
+    const p1 = makePlayer({ id: 'p1', capitalTile: SPAWN, ownedTiles: [SPAWN], hero });
+    const state = fixtureState([p1], [makeTile({ coord: SPAWN, type: 'Plains', ownerId: 'p1' })], {
+      currentPhase: Phase.Fight,
+      heroCoordBeforeMoveThisTurn: SPAWN,
+    });
+    expect(() => applyAction(state, { type: 'Flee', actorId: 'p1' })).toThrow(IllegalActionError);
+    expect(() => applyAction(state, { type: 'Flee', actorId: 'p1' })).toThrow(/no monster/i);
   });
 });
 

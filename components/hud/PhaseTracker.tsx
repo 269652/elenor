@@ -1,7 +1,10 @@
 import clsx from 'clsx';
 import { Phase, PHASE_LABEL, type GameState } from '@/engine';
 
-const PHASES_IN_ORDER = [Phase.Production, Phase.DrawAndPlaceTile, Phase.MoveHero, Phase.Gather, Phase.Fight, Phase.Build];
+// [DEFAULT — direct request: "swap gather and fight phase"] This array — not Phase's own
+// numeric values (see types.ts) — is what actually drives the strip's visual order and the
+// past/active/future calc below, so it needed its own manual swap alongside the enum's.
+const PHASES_IN_ORDER = [Phase.Production, Phase.DrawAndPlaceTile, Phase.MoveHero, Phase.Fight, Phase.Gather, Phase.Build];
 
 const SHORT_LABEL: Record<Phase, string> = {
   [Phase.Production]: 'Production',

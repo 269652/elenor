@@ -113,6 +113,7 @@ export function createGame(gameId: string, playerInputs: SetupPlayerInput[], see
     hasFoughtThisTurn: false,
     hasBuiltThisTurn: false,
     hasMovedThisTurn: false,
+    heroCoordBeforeMoveThisTurn: null,
   };
   state.rngCursor = rng.cursor;
 

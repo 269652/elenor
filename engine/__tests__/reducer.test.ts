@@ -46,21 +46,25 @@ describe('reducer integration — a full turn through all six phases', () => {
       expect(state.players.find((p) => p.id === p1)!.hero.position).toEqual(placeCoord);
     }
 
-    // Phase 3: Gather (no guaranteed action available — just advance through it).
-    state = applyAction(state, { type: 'AdvancePhase', actorId: p1 });
-    expect(state.currentPhase).toBe(Phase.Gather);
+    // Phase 3: Fight — [DEFAULT — direct request: "swap gather and fight phase so that upon
+    // move the fight phase starts"] Fight now runs immediately after Move Hero, before Gather.
     state = applyAction(state, { type: 'AdvancePhase', actorId: p1 });
     expect(state.currentPhase).toBe(Phase.Fight);
 
-    // Phase 4: [Munchkin exploration layer] stepping onto that brand-new tile in Phase 2 may
-    // have drawn a Door card — if it came up Monster, it's mandatory (applyAdvancePhase refuses
-    // to leave Phase 4 otherwise) and has to be fought here before advancing; a Utility card (or
-    // no draw at all, e.g. a River tile the hero couldn't enter) leaves nothing pending.
+    // [Munchkin exploration layer] stepping onto that brand-new tile in Phase 2 may have drawn a
+    // Door card — if it came up Monster, it's mandatory (applyAdvancePhase refuses to leave
+    // Phase 3 otherwise) and has to be resolved here before advancing, fought or fled — a
+    // Utility card (or no draw at all, e.g. a River tile the hero couldn't enter) leaves nothing
+    // pending.
     if (state.pendingDoorMonster) {
       const { coord, monsterCardId } = state.pendingDoorMonster;
       state = applyAction(state, { type: 'Fight', actorId: p1, combatType: 'HeroVsMonster', coord, monsterCardId });
       expect(state.pendingDoorMonster).toBeNull();
     }
+
+    // Phase 4: Gather (no guaranteed action available — just advance through it).
+    state = applyAction(state, { type: 'AdvancePhase', actorId: p1 });
+    expect(state.currentPhase).toBe(Phase.Gather);
     state = applyAction(state, { type: 'AdvancePhase', actorId: p1 });
     expect(state.currentPhase).toBe(Phase.Build);
 
