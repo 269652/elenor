@@ -92,7 +92,19 @@ function LobbyRoster({ players }: { players: LobbyPlayerInfo[] }) {
 
 // ── Host ─────────────────────────────────────────────────────────────────────────────────────
 
-function HostLobby({ hostState, onLeave }: { hostState: Extract<P2PHostPhase, { phase: 'lobby' }>; onLeave: () => void }) {
+function HostLobby({
+  hostState,
+  onLeave,
+  onMainMenu,
+}: {
+  hostState: Extract<P2PHostPhase, { phase: 'lobby' }>;
+  onLeave: () => void;
+  /** [DEFAULT — direct request: "There's no back to main screen button in the lobbies... add
+   *  that for hotseat and p2p"] Distinct from onLeave: onLeave only backs out to P2P's OWN
+   *  'menu' screen (host/join/resume-setup); this goes all the way back to the landing page,
+   *  same as that top-level menu screen's own "← Back" already does (see exitP2P in P2PApp). */
+  onMainMenu: () => void;
+}) {
   return (
     <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-4`}>
       <div className="flex flex-col gap-1">
@@ -113,6 +125,9 @@ function HostLobby({ hostState, onLeave }: { hostState: Extract<P2PHostPhase, { 
       <button type="button" onClick={onLeave} className={BTN_GHOST}>
         ✖ Close room
       </button>
+      <button type="button" onClick={onMainMenu} className={BTN_GHOST}>
+        🏠 Main Menu
+      </button>
     </div>
   );
 }
@@ -122,6 +137,7 @@ function P2PHostRoom({
   color,
   onBack,
   onLeave,
+  onMainMenu,
   onTransferredAway,
   resumeFromSavedGame,
 }: {
@@ -129,6 +145,9 @@ function P2PHostRoom({
   color: string;
   onBack: () => void;
   onLeave: () => void;
+  /** [DEFAULT — direct request: "There's no back to main screen button in the lobbies... add
+   *  that for hotseat and p2p"] See HostLobby's identical prop for the distinction from onLeave. */
+  onMainMenu: () => void;
   /** [DEFAULT — direct request: "transfer hosting to another player"] Room code is only known
    *  once useP2PHost resolves it (below) — not available at the moment this callback is WIRED
    *  UP (that has to happen before the hook call, as its own param) — so it's threaded through
@@ -160,8 +179,8 @@ function P2PHostRoom({
 
   if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label="Opening a room…" onCancel={onLeave} /></CenteredScreen>;
   if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
-  if (result.phase === 'lobby') return <CenteredScreen><HostLobby hostState={result} onLeave={onLeave} /></CenteredScreen>;
-  if (result.phase === 'resume-lobby') return <CenteredScreen><ResumeHostLobby hostState={result} onLeave={onLeave} /></CenteredScreen>;
+  if (result.phase === 'lobby') return <CenteredScreen><HostLobby hostState={result} onLeave={onLeave} onMainMenu={onMainMenu} /></CenteredScreen>;
+  if (result.phase === 'resume-lobby') return <CenteredScreen><ResumeHostLobby hostState={result} onLeave={onLeave} onMainMenu={onMainMenu} /></CenteredScreen>;
   // Unwrapped, same as components/HotseatApp.tsx's LocalGame — GameBoardApp's own grid fills the
   // page's full block width/height; a centering wrapper here would shrink it to content size.
   const ctx: P2PRoomContext = {
@@ -195,6 +214,7 @@ function P2PJoinRoom({
   color,
   onBack,
   onLeave,
+  onMainMenu,
   onBecameHost,
   autoClaimPlayerId,
 }: {
@@ -203,6 +223,9 @@ function P2PJoinRoom({
   color: string;
   onBack: () => void;
   onLeave: () => void;
+  /** [DEFAULT — direct request: "There's no back to main screen button in the lobbies... add
+   *  that for hotseat and p2p"] See HostLobby's identical prop for the distinction from onLeave. */
+  onMainMenu: () => void;
   /** [DEFAULT — direct request: "transfer hosting to another player"] See
    *  hooks/use-p2p-join.ts's UseP2PJoinCallbacks — the hook has already seeded a host session to
    *  resume into by the time this fires, so all P2PApp needs to do is switch `screen`. */
@@ -241,6 +264,9 @@ function P2PJoinRoom({
           <button type="button" onClick={onLeave} className={BTN_GHOST}>
             ✖ Leave room
           </button>
+          <button type="button" onClick={onMainMenu} className={BTN_GHOST}>
+            🏠 Main Menu
+          </button>
         </div>
       </CenteredScreen>
     );
@@ -255,6 +281,9 @@ function P2PJoinRoom({
           <ResumeJoinLobby players={result.players} myPlayerId={result.myPlayerId} onClaim={result.claimSeat} />
           <button type="button" onClick={onLeave} className={BTN_GHOST}>
             ✖ Leave room
+          </button>
+          <button type="button" onClick={onMainMenu} className={BTN_GHOST}>
+            🏠 Main Menu
           </button>
         </div>
       </CenteredScreen>
@@ -534,6 +563,7 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
         color={color}
         onBack={leaveHostRoom}
         onLeave={leaveHostRoom}
+        onMainMenu={exitP2P}
         onTransferredAway={(code) => {
           setCommittedRoomCode(code);
           setScreen('join-room');
@@ -643,6 +673,7 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
       color={color}
       onBack={leaveJoinRoom}
       onLeave={leaveJoinRoom}
+      onMainMenu={exitP2P}
       onBecameHost={() => setScreen('host-room')}
       autoClaimPlayerId={autoClaimPlayerId}
     />

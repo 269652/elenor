@@ -81,7 +81,7 @@ interface HotseatBundle {
   key: number;
 }
 
-export function HotseatApp() {
+export function HotseatApp({ onExit }: { onExit?: () => void }) {
   const [bundle, setBundle] = useState<HotseatBundle>(() => {
     const session = loadHotseatSession();
     return { payload: session?.payload ?? null, state: session?.state ?? null, key: 0 };
@@ -173,6 +173,15 @@ export function HotseatApp() {
                 📂 Load a saved game
               </button>
             </>
+          )}
+          {/* [DEFAULT — direct request: "There's no back to main screen button in the lobbies...
+              add that for hotseat and p2p"] This pre-game screen had no way back to the landing
+              page at all before this — visible in both the default setup form and the "load a
+              saved game" view above. */}
+          {onExit && (
+            <button type="button" onClick={onExit} className={BTN_GHOST}>
+              🏠 Main Menu
+            </button>
           )}
         </div>
       </div>

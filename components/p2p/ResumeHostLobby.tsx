@@ -26,9 +26,14 @@ const STATUS_BADGE: Record<'connected' | 'ai' | 'ghost', { label: string; classN
 export function ResumeHostLobby({
   hostState,
   onLeave,
+  onMainMenu,
 }: {
   hostState: Extract<P2PHostPhase, { phase: 'resume-lobby' }>;
   onLeave: () => void;
+  /** [DEFAULT — direct request: "There's no back to main screen button in the lobbies... add
+   *  that for hotseat and p2p"] Distinct from onLeave — see components/p2p/P2PApp.tsx's
+   *  HostLobby (its non-resume sibling) for the identical distinction. */
+  onMainMenu: () => void;
 }) {
   return (
     <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-4`}>
@@ -103,6 +108,9 @@ export function ResumeHostLobby({
         className={BTN_GHOST}
       >
         ✖ Close room
+      </button>
+      <button type="button" onClick={onMainMenu} className={BTN_GHOST}>
+        🏠 Main Menu
       </button>
     </div>
   );

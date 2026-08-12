@@ -37,7 +37,11 @@ export function LandingPage({ supabaseConfigured }: { supabaseConfigured: boolea
   }, []);
   if (tab === null) return null;
 
-  if (tab === 'local') return <HotseatApp />;
+  // [DEFAULT — direct request: "There's no back to main screen button in the lobbies... add that
+  // for hotseat and p2p"] HotseatApp previously received no way at all to signal "leave hotseat
+  // and go back to the landing page" — its pre-game screen (components/HotseatApp.tsx) had no
+  // such button anywhere. P2P already gets this via its own onExit prop below.
+  if (tab === 'local') return <HotseatApp onExit={() => setTab('menu')} />;
   // [DEFAULT — direct request: "WebRTC screens should render exactly the same as hotseat UI
   // elements and make use of whole screen"] No wrapper here, same as the 'local' branch above —
   // P2PApp now owns its own per-screen centering (components/p2p/P2PApp.tsx's CenteredScreen),
