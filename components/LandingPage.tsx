@@ -79,7 +79,7 @@ export function LandingPage({ supabaseConfigured }: { supabaseConfigured: boolea
             className="font-display text-5xl font-bold tracking-tight text-hx-ink sm:text-6xl"
             style={{ textShadow: '0 2px 20px rgba(0,0,0,0.7), 0 1px 3px rgba(0,0,0,0.9)' }}
           >
-            🗺️ Hexrealms
+            🗺️ Elenor
           </h1>
           <p className="text-base text-hx-ink-dim" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.8)' }}>
             Settlers + Risk + Munchkin, on one shared hex world.

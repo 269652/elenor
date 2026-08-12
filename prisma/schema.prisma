@@ -1,4 +1,4 @@
-// HexRealms persistence schema — see docs/architecture.md §5.
+// Elenor persistence schema — see docs/architecture.md §5.
 //
 // GameState is stored as a single JSONB blob per game row (not normalized), because the
 // reducer consumes/produces the whole shape as one unit (load -> reduce -> save). `version`

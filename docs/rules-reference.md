@@ -1,4 +1,4 @@
-# HEXREALMS — Rules Reference
+# ELENOR — Rules Reference
 
 Authoritative implementation spec. Every rule below is tagged:
 

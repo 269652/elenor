@@ -1,4 +1,4 @@
-# 🗺️ Hexrealms
+# 🗺️ Elenor
 
 **Settlers + Risk + Munchkin, on one shared hex world.**
 

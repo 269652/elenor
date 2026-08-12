@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /**
- * Hexrealms design tokens — "Illuminated Atlas": a warm, lantern-lit fantasy cartography
+ * Elenor design tokens — "Illuminated Atlas": a warm, lantern-lit fantasy cartography
  * palette pulled from the commissioned tile paintings (public/artworks/tiles/), not a generic
  * dark-mode grey. Always dark — this is a game board, not a document, no light-mode branch.
  * Tailwind v4 auto-generates utilities from these (--color-hx-gold -> bg-hx-gold/text-hx-gold/

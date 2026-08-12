@@ -1,10 +1,11 @@
 {
-  "name": "hexrealms",
+  "name": "elenor",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:itch": "node scripts/build-itch.mjs",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",

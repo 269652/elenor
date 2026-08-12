@@ -1,4 +1,4 @@
-# HexRealms — Engine Data Model
+# Elenor — Engine Data Model
 
 TypeScript-flavored spec for the shared game-state engine. This file defines the canonical
 `GameState` shape and the `Action` union a single reducer function consumes. Every identifier

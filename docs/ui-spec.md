@@ -1,4 +1,4 @@
-# HEXREALMS — UI/UX Specification
+# ELENOR — UI/UX Specification
 
 Status: working draft, companion to the Design Canon. All names (phases, resources, classes,
 buildings) are used verbatim from the canon so this doc can be cross-referenced without translation.

@@ -1,8 +1,8 @@
-# HexRealms — Technical Architecture
+# Elenor — Technical Architecture
 
 ## 1. Overall Approach
 
-HexRealms is built around a single **server-authoritative reducer**: a pure function `applyAction(state, action) -> newState` that encodes every rule in the design canon (phase order, resource math, combat resolution, win conditions). This function is the *only* place game rules live. Everything else — UI, persistence, networking, auth — is a thin shell around it.
+Elenor is built around a single **server-authoritative reducer**: a pure function `applyAction(state, action) -> newState` that encodes every rule in the design canon (phase order, resource math, combat resolution, win conditions). This function is the *only* place game rules live. Everything else — UI, persistence, networking, auth — is a thin shell around it.
 
 Two properties make this work across three very different multiplayer modes:
 
@@ -101,7 +101,7 @@ The key design choice for realtime is to **broadcast the Action, not the full St
 Evaluated three options for pushing action updates to connected players:
 
 - **Pusher** — pure pub/sub fan-out. It solves broadcasting but not authority: you still need a separate server (Vercel function + DB) to validate and persist every action, plus your own locking to avoid two near-simultaneous submissions racing each other. It adds a vendor without removing any of the hard problems, so it's the weakest fit here.
-- **PartyKit (Cloudflare Durable Objects)** — a strong technical fit: one room = one single-threaded object that can hold `GameState` in memory, apply the reducer, and broadcast, which eliminates race conditions by construction and gives the lowest latency of the three. The cost is operational: it's a second deployment target (Cloudflare Workers, separate from Vercel), and room membership/session needs to be bridged from the Next.js side via a signed token. That's reasonable overhead for a game that truly needs sub-100ms sync, but HexRealms is turn-based (hex placement, hero moves, dice rolls) — not a twitch game — so this buys latency the design doesn't need at solo-project scale.
+- **PartyKit (Cloudflare Durable Objects)** — a strong technical fit: one room = one single-threaded object that can hold `GameState` in memory, apply the reducer, and broadcast, which eliminates race conditions by construction and gives the lowest latency of the three. The cost is operational: it's a second deployment target (Cloudflare Workers, separate from Vercel), and room membership/session needs to be bridged from the Next.js side via a signed token. That's reasonable overhead for a game that truly needs sub-100ms sync, but Elenor is turn-based (hex placement, hero moves, dice rolls) — not a twitch game — so this buys latency the design doesn't need at solo-project scale.
 - **Supabase Realtime** — pairs naturally with Postgres as the persistence layer (see below), which matters most for an indie/solo project: one vendor, one dashboard, one bill, and no second deployment target. The authoritative apply still happens in a Vercel Server Action (load row → `applyAction` → write row), with race safety handled by simple **optimistic concurrency**: the write is `UPDATE games SET state=…, version=version+1 WHERE id=… AND version=$expected`, retried on conflict. A `channel.send()`/`postgres_changes` broadcast then pushes the applied action to subscribers. The extra DB round-trip per action (tens of ms) is invisible for a game paced in seconds, not frames.
 
 **Recommendation: Supabase Realtime**, paired with Supabase Postgres for persistence. For a solo/indie build the win isn't raw performance — it's collapsing "database" and "realtime pub/sub" into a single vendor and a single mental model (write to Postgres → subscribers get notified), with the entire authoritative path living in ordinary Vercel Server Actions and no always-on process to operate. PartyKit is the documented upgrade path if a future version needs true low-latency co-located state (the room's message handler would call the exact same `applyAction` — the engine doesn't change, only the adapter in `server/`).
@@ -126,7 +126,7 @@ Proposed schema (`prisma/schema.prisma`):
 ## 6. Next.js Project Structure
 
 ```
-hexrealms/
+elenor/
   app/
     (marketing)/page.tsx              # landing page
     play/[roomCode]/page.tsx          # game board UI — mode-agnostic

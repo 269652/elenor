@@ -1,4 +1,4 @@
-# Hexrealms — Game Design Document
+# Elenor — Game Design Document
 
 *(working title, placeholder — renameable)*
 
@@ -18,7 +18,7 @@ turns, not the last few. You are simultaneously a settler laying down farms and 
 general probing the frontier for a weak flank, and a scrappy dungeon-diver sending your one hero
 out to kick down the door of whatever's living in the Ruins two tiles over.
 
-Hexrealms is the game that results from asking "what if Catan's resource tiles, Risk's contested
+Elenor is the game that results from asking "what if Catan's resource tiles, Risk's contested
 borders, and Munchkin's greedy little power-fantasy hero all had to live on the same board at
 the same time?" You will build an economy, because you need Wood and Ore and Gold to do anything
 at all. You will pick fights, because your neighbor's undefended Hills tile is right there. And
@@ -184,7 +184,7 @@ taken evenly off the four bulk economy terrains — Forest and Plains from 22% t
 again). Ruins are the only tile that hosts a Monster Den, which makes them the
 only source of hero XP, levels and loot anywhere in the game outside a Hunting Lodge. At 6% a whole
 game put two to five of them on the board, so a player who wanted to play the dungeon-diving half of
-Hexrealms simply wasn't dealt enough dungeons to dive; the Munchkin layer stayed decorative no
+Elenor simply wasn't dealt enough dungeons to dive; the Munchkin layer stayed decorative no
 matter how well anyone played it. Doubling the share is what gives that third of the design enough
 material to be a real strategy rather than a flavor note.
 
@@ -383,7 +383,7 @@ holds its production until someone comes and picks it up, the hero became the em
 logistics corps — and it was already the empire's only adventurer. One token, movement two, two
 full-time jobs. Logistics won every time, because there is always another tile with a pile on it and
 the pile is guaranteed, while a Monster Den is a coin flip that can cost you half your HP. The
-dungeon-diving third of Hexrealms wasn't weak; nobody could afford the turns to go and play it.
+dungeon-diving third of Elenor wasn't weak; nobody could afford the turns to go and play it.
 
 A road costs 1 Wood, sits on the edge between two adjacent hexes, and can be laid at any point in
 your own turn without spending anything else. The payoff: **any tile you own that's chained back to
@@ -429,7 +429,7 @@ empty-handed is a genuinely late-game disappointment rather than a routine one.
 
 ## 7. Win Conditions & How a Session Ends
 
-A game of Hexrealms can end three different ways, checked at the end of each round; the first
+A game of Elenor can end three different ways, checked at the end of each round; the first
 player to trigger any condition wins, with ties broken by highest total Victory Points.
 
 1. **Victory Points ≥ 120.** VP accrue from tiles owned, buildings built, Town tiers, hero level
@@ -474,7 +474,7 @@ result everyone already knew would be ceremony, not a game.
 
 ## 8. Target Player Count & Session Length
 
-Hexrealms is designed for **2–6 players**, with a target session length of **45–90 minutes**.
+Elenor is designed for **2–6 players**, with a target session length of **45–90 minutes**.
 Both numbers are placeholders the designer expects to retune once the turn structure and win
 conditions are in playtesting — but they're the numbers the phase structure, tile deck size, and
 VP threshold should be built around for now.

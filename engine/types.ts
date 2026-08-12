@@ -1,5 +1,5 @@
 /**
- * HexRealms engine — canonical types.
+ * Elenor engine — canonical types.
  *
  * Mirrors docs/data-model.md verbatim (that doc is the source of truth for this file's
  * shape). This module has ZERO imports from React, Next.js, or any DB/network client —
