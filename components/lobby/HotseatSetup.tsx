@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { SetupPlayerInput } from '@/engine';
 import { BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 
@@ -24,7 +24,17 @@ export interface HotseatStartPayload {
   settings: GameSettings;
 }
 
-export function HotseatSetup({ onStart }: { onStart: (payload: HotseatStartPayload) => void }) {
+export function HotseatSetup({
+  onStart,
+  footer,
+}: {
+  onStart: (payload: HotseatStartPayload) => void;
+  /** [DEFAULT — direct request: "Put them under start game button within panel"] Rendered right
+   *  after the Start Game button, still inside this component's own panel — HotseatApp.tsx uses
+   *  this for its Load a saved game / Main Menu row rather than this component needing to know
+   *  about either concept itself. */
+  footer?: ReactNode;
+}) {
   const [names, setNames] = useState<string[]>([DEFAULT_NAMES[0], DEFAULT_NAMES[1]]);
   const [isAI, setIsAI] = useState<boolean[]>([false, false]);
   const [turnTimerSeconds, setTurnTimerSeconds] = useState<number>(0);
@@ -150,6 +160,7 @@ export function HotseatSetup({ onStart }: { onStart: (payload: HotseatStartPaylo
         <button type="button" onClick={start} className={`${BTN_PRIMARY} w-full font-display tracking-wide`}>
           Start Game ▶
         </button>
+        {footer}
       </div>
     </div>
   );

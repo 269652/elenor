@@ -156,6 +156,11 @@ export function HotseatApp({ onExit }: { onExit?: () => void }) {
           </>
         )}
         <div className="relative z-10 flex w-full flex-col items-center gap-3">
+          {/* [DEFAULT — direct request: "Put them under start game button within panel"] Both
+              Load a saved game and Main Menu now render INSIDE whichever panel is showing —
+              HotseatSetup's own footer slot on the default view (right after Start Game), or
+              this panel's own bottom on the load-screen view — rather than as a separate row
+              below the panel's border. */}
           {showLoadScreen ? (
             <div className={`${PANEL} mx-auto flex w-full max-w-md flex-col gap-3 motion-safe:animate-fade-up`}>
               <div className="flex items-center justify-between gap-2">
@@ -165,23 +170,32 @@ export function HotseatApp({ onExit }: { onExit?: () => void }) {
                 </button>
               </div>
               <SavedGamesPanel mode="hotseat" onRestore={handleRestore} />
+              {/* [DEFAULT — direct request: "There's no back to main screen button in the
+                  lobbies... add that for hotseat and p2p"] */}
+              {onExit && (
+                <button type="button" onClick={onExit} className={BTN_GHOST}>
+                  🏠 Main Menu
+                </button>
+              )}
             </div>
           ) : (
-            <>
-              <HotseatSetup onStart={handleStart} />
-              <button type="button" onClick={() => setShowLoadScreen(true)} className={BTN_GHOST}>
-                📂 Load a saved game
-              </button>
-            </>
-          )}
-          {/* [DEFAULT — direct request: "There's no back to main screen button in the lobbies...
-              add that for hotseat and p2p"] This pre-game screen had no way back to the landing
-              page at all before this — visible in both the default setup form and the "load a
-              saved game" view above. */}
-          {onExit && (
-            <button type="button" onClick={onExit} className={BTN_GHOST}>
-              🏠 Main Menu
-            </button>
+            <HotseatSetup
+              onStart={handleStart}
+              footer={
+                <div className="flex w-full gap-2">
+                  <button type="button" onClick={() => setShowLoadScreen(true)} className={`flex-1 ${BTN_GHOST}`}>
+                    📂 Load a saved game
+                  </button>
+                  {/* [DEFAULT — direct request: "There's no back to main screen button in the
+                      lobbies... add that for hotseat and p2p"] */}
+                  {onExit && (
+                    <button type="button" onClick={onExit} className={`flex-1 ${BTN_GHOST}`}>
+                      🏠 Main Menu
+                    </button>
+                  )}
+                </div>
+              }
+            />
           )}
         </div>
       </div>
