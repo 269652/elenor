@@ -15,6 +15,7 @@ import { connectAsJoiner, type PeerRoomHandle } from '@/lib/webrtc/peer-room';
 import type { MediaConnection } from 'peerjs';
 import type { ChatMessage, LobbyPlayerInfo, ResumeLobbyPlayerInfo, VoicePeerInfo } from '@/lib/webrtc/protocol';
 import { clearJoinSession, saveHostSession } from '@/lib/webrtc/persistence';
+import { trackEvent } from '@/lib/analytics';
 
 export type P2PJoinPhase =
   | { phase: 'connecting' }
@@ -305,6 +306,10 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
                 setGameState(message.state);
                 setAiControlledPlayerIds(new Set(message.aiControlledPlayerIds));
                 setPhase('active');
+                // [DEFAULT — direct request: "track when a user starts a new game"] Only ever
+                // arrives for a fresh game — a resumed joiner's reconnect gets 'stateSync'
+                // instead (see the comment on that case below), never this one.
+                trackEvent('game_start', { mode: 'p2p_join' });
                 break;
               case 'stateSync':
                 gameStateRef.current = message.state;

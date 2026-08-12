@@ -31,6 +31,7 @@ import type { ChatMessage, LobbyPlayerInfo, ResumeLobbyPlayerInfo, VoicePeerInfo
 import { generateRoomCode } from '@/lib/webrtc/protocol';
 import { clearHostSession, loadHostSession, saveHostSession, saveJoinSession } from '@/lib/webrtc/persistence';
 import type { SavedGame } from '@/lib/savedGames';
+import { trackEvent } from '@/lib/analytics';
 
 export type P2PHostPhase =
   | { phase: 'connecting' }
@@ -868,6 +869,10 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     setPhase('active');
     persistRef.current();
     handleRef.current?.broadcast({ kind: 'gameStarted', state: initial, aiControlledPlayerIds: [...aiControlledRef.current] });
+    // [DEFAULT — direct request: "track when a user starts a new game"] Host-side only — this is
+    // exclusively the fresh-game path (resumeGame, below, is the separate resume path), and each
+    // joiner tracks its own 'gameStarted' arrival independently, see use-p2p-join.ts.
+    trackEvent('game_start', { mode: 'p2p_host', playerCount: players.length });
   }, [roomCode]);
 
   const dispatch = useCallback((action: Action): boolean => {

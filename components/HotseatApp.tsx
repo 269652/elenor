@@ -12,6 +12,7 @@ import { clearHotseatSession, loadHotseatSession, saveHotseatSession } from '@/l
 import { SavedGamesPanel } from '@/components/SavedGamesPanel';
 import type { SavedGame } from '@/lib/savedGames';
 import { BTN_GHOST, PANEL } from '@/components/uiClasses';
+import { trackEvent } from '@/lib/analytics';
 
 function LocalGame({
   players,
@@ -140,6 +141,9 @@ export function HotseatApp({ onExit }: { onExit?: () => void }) {
   function handleStart(payload: HotseatStartPayload) {
     setShowLoadScreen(false);
     transition({ payload, state: null });
+    // [DEFAULT — direct request: "track when a user starts a new game"] Only reached for a
+    // genuinely fresh game — handleRestore (below) is the resume path and never calls this.
+    trackEvent('game_start', { mode: 'hotseat', playerCount: payload.players.length, aiCount: payload.players.filter((p) => p.isAI).length });
   }
 
   /** [DEFAULT — direct request: "a third tab .. allows you to restore it"] Persists the restored

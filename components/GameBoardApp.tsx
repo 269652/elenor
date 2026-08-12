@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import clsx from 'clsx';
 import { SCREEN_ART } from '@/components/screenArt';
@@ -42,6 +42,7 @@ import { SavedGamesPanel } from '@/components/SavedGamesPanel';
 import type { P2PRoomContext } from '@/components/p2p/types';
 import type { HotseatStartPayload } from '@/components/lobby/HotseatSetup';
 import type { SavedGame } from '@/lib/savedGames';
+import { trackEvent } from '@/lib/analytics';
 
 const NO_AI_PLAYERS: ReadonlySet<PlayerId> = new Set();
 
@@ -371,6 +372,30 @@ export function GameBoardApp({
   const noTileDrawnYet = state.currentPhase === Phase.DrawAndPlaceTile && !state.pendingTileDraw && !state.hasPlacedTileThisTurn;
   useAiTurn(state, effectiveAiPlayerIds, dispatch);
 
+  // [DEFAULT — direct request: "track when a user starts a new game, wins, loses or quits a
+  // running game"] Fires exactly once per game, the render after winnerId first flips from null
+  // — trackedWinRef (not just the state.winnerId dep) is what guarantees the "once" part, since
+  // p2p is a freshly-built object every render (see its own header comment) and would otherwise
+  // re-run this effect — and re-fire the event — on every subsequent re-render for the rest of
+  // the (now frozen, game-over) session.
+  const trackedWinRef = useRef(false);
+  useEffect(() => {
+    if (!state.winnerId || trackedWinRef.current) return;
+    trackedWinRef.current = true;
+    const payload = { winCondition: state.winCondition, roundNumber: state.roundNumber };
+    if (p2p) {
+      // P2P has a real per-device identity (p2p.myPlayerId) to compare the winner against, so
+      // each connected client can tell its own win from its own loss.
+      trackEvent(p2p.myPlayerId === state.winnerId ? 'game_win' : 'game_lose', { mode: 'p2p', ...payload });
+    } else {
+      // Hotseat is pass-and-play on one shared device — there's no stable "you" distinct from
+      // the winner to compare against (hotseatAdmin.myPlayerId is just "whoever's turn it
+      // currently is", not a real per-seat identity), so a win/lose split isn't meaningful here.
+      // Track the table's own outcome once instead.
+      trackEvent('game_win', { mode: 'hotseat', ...payload });
+    }
+  }, [state.winnerId, state.winCondition, state.roundNumber, p2p]);
+
   function clearModes() {
     setMarchFrom(null);
     setPendingAssault(null);
@@ -605,6 +630,11 @@ export function GameBoardApp({
                 type="button"
                 onClick={() => {
                   if (window.confirm('Exit this game? You can resume a hotseat game later, but a P2P room closes for everyone once the host leaves.')) {
+                    // [DEFAULT — direct request: "track ... when a user ... quits a running
+                    // game"] This button only ever renders here, in the main (non-game-over)
+                    // render — the finished-game screen above has its own separate, no-confirm
+                    // "Exit to menu" button that doesn't count as quitting.
+                    trackEvent('game_quit', { mode: p2p ? 'p2p' : 'hotseat', roundNumber: state.roundNumber });
                     onExit();
                   }
                 }}
