@@ -7,6 +7,7 @@ import {
   LOOT_SELL_TROOPS,
   Phase,
   ROAD_COST,
+  ROAD_MIN_CAPITAL_TIER,
   RESOURCE_TYPES,
   SMITHY_CRAFT_COSTS,
   applyMageDiscount,
@@ -27,7 +28,7 @@ import {
   type Player,
   type ResourceCost,
 } from '@/engine';
-import { BTN_GHOST, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
+import { INPUT, PANEL } from '@/components/uiClasses';
 
 interface BuildMenuProps {
   state: GameState;
@@ -235,14 +236,32 @@ export function BuildMenu({
 
   const sellableLoot = isBarracksTile && isLocal ? hero.inventory.filter((c) => !hero.equippedLootIds.includes(c.id)) : [];
 
-  // Road panel bits — see the props doc comment above for why these live in GameBoardApp instead
-  // of local state.
+  // Road bits — see the props doc comment above for why roadMode/roadAnchor live in GameBoardApp
+  // instead of local state.
   const isRoadMage = classDefFor(player).startingBonus.kind === 'Mage';
   const roadCost = isRoadMage ? applyMageDiscount(ROAD_COST) : ROAD_COST;
-  const roadWoodNeeded = roadCost.Wood ?? 0;
-  const roadCarried = player.hero.carriedResources.Wood;
-  const roadAffordable = player.resources.Wood + roadCarried >= roadWoodNeeded;
+  // [BUG FIX — direct request: "should be disabled if player doesn't have the resources"] Used to
+  // check Wood alone — ROAD_COST gained a Stone leg in balance rework pass 5
+  // (engine/constants.ts) and this was never updated to match, so a player with plenty of Wood
+  // but no Stone still saw an enabled button the engine would then reject. Mirrors
+  // canAffordHere's own across-every-resource check; carried resources count unconditionally
+  // (not gated on which endpoint the hero ends up choosing, since that isn't picked yet at this
+  // preview stage) — same loose-upper-bound approximation the Wood-only version already used.
+  const roadMissing = RESOURCE_TYPES.filter((r) => (roadCost[r] ?? 0) > player.resources[r] + hero.carriedResources[r]);
   const anyRoadEdgeLeft = roadEndpointOptions(state, player, null).size > 0;
+  // [BUG FIX — same direct request] The Capital Tier 2 gate (engine/reducers.ts's
+  // applyBuildRoad, ROAD_MIN_CAPITAL_TIER) was never reflected here either — the button could
+  // show enabled for a Tier 0/1 player right up until the engine rejected the dispatch.
+  const roadTierLocked = player.capitalTier < ROAD_MIN_CAPITAL_TIER;
+  const roadReasons: string[] = [];
+  if (roadTierLocked) roadReasons.push(`Requires Capital Tier ${ROAD_MIN_CAPITAL_TIER} (currently Tier ${player.capitalTier})`);
+  if (roadMissing.length > 0) {
+    roadReasons.push(
+      `Need ${roadMissing.map((r) => `${(roadCost[r] ?? 0) - (player.resources[r] + hero.carriedResources[r])} more ${r}`).join(', ')}`
+    );
+  }
+  if (!anyRoadEdgeLeft) roadReasons.push('No free borders left to road');
+  const roadLocked = roadReasons.length > 0;
 
   const infoDef = infoBuilding ? BUILDING_DEFINITIONS[infoBuilding] : null;
   const infoCost = infoDef ? (isMage ? applyMageDiscount(infoDef.cost) : infoDef.cost) : undefined;
@@ -427,123 +446,103 @@ export function BuildMenu({
               underneath. Each tile also carries a "?" info button (direct request: "a '?' button
               on the build CTAs which opens a small modal explaining what the building does") —
               a separate nested button, not the tile's own title tooltip, since a tooltip alone
-              isn't reachable on touch and the ask was specifically for a modal. */}
-          {buildCandidates.length > 0 && (
-            <div className="grid grid-cols-2 gap-2">
-              {buildCandidates.map(({ type, cost, reasons }) => {
-                const locked = reasons.length > 0;
-                return (
-                  <div key={type} className="relative">
-                    <button
-                      type="button"
-                      disabled={!canBuild || locked}
-                      title={locked ? reasons.join(' · ') : undefined}
-                      onClick={() => void dispatch({ type: 'Build', actorId: player.id, buildingType: type, coord: selectedCoord })}
-                      className="flex w-full flex-col items-center gap-1 rounded-sm border border-hx-border bg-hx-panel-2 p-2.5 text-center transition hover:border-hx-gold/50 hover:bg-hx-panel disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <span className="text-2xl leading-none" aria-hidden="true">
-                        {BUILDING_ICON[type]}
-                      </span>
-                      <span className="flex items-center gap-1 text-xs font-semibold text-hx-ink">
-                        {locked && <span aria-hidden="true">🔒</span>}
-                        {type}
-                      </span>
-                      <span className="font-mono text-[10px] text-hx-ink-dim">{costLabel(cost)}</span>
-                      {/* [DEFAULT — direct feedback: "a lot of text doesn't have enough contrast
-                          to be readable"] Was text-hx-copper on this tile's neutral dark
-                          bg-hx-panel-2 — copper alone (not tinted) still measured well under
-                          WCAG's 4.5:1 here, and disabled:opacity-40 above only made it worse. */}
-                      {locked && <span className="text-[10px] font-semibold text-hx-gold-bright">{reasons.join(' · ')}</span>}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setInfoBuilding(type);
-                      }}
-                      title={`What does ${type} do?`}
-                      aria-label={`What does ${type} do?`}
-                      className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border border-hx-border-strong bg-hx-panel text-[10px] font-bold text-hx-ink-dim transition hover:border-hx-gold hover:text-hx-gold"
-                    >
-                      ?
-                    </button>
-                  </div>
-                );
-              })}
+              isn't reachable on touch and the ask was specifically for a modal.
+              [DEFAULT — direct request: "Lay roads should not be an extra panel.. just an icon
+              button like the other buildings"] Road is appended as one more tile in this SAME
+              grid instead of its own bordered "Roads & supply" section below — it isn't a real
+              BuildingType (it doesn't occupy the selected tile's building slot, or even
+              necessarily target the selected tile at all — see roadEndpointOptions), so it's a
+              synthetic entry rather than one more member of buildCandidates, but it gets the
+              identical card treatment: icon, cost, and a locked-reason list built from the exact
+              same checks (resources across every ROAD_COST resource, not just Wood; the Capital
+              Tier gate; whether any legal edge is even left) applyBuildRoad itself enforces. The
+              grid always renders now (used to be gated on buildCandidates.length, back when Road
+              lived in its own separate section) since Road guarantees at least one tile. */}
+          <div className="grid grid-cols-2 gap-2">
+            {buildCandidates.map(({ type, cost, reasons }) => {
+              const locked = reasons.length > 0;
+              return (
+                <div key={type} className="relative">
+                  <button
+                    type="button"
+                    disabled={!canBuild || locked}
+                    title={locked ? reasons.join(' · ') : undefined}
+                    onClick={() => void dispatch({ type: 'Build', actorId: player.id, buildingType: type, coord: selectedCoord })}
+                    className="flex w-full flex-col items-center gap-1 rounded-sm border border-hx-border bg-hx-panel-2 p-2.5 text-center transition hover:border-hx-gold/50 hover:bg-hx-panel disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="text-2xl leading-none" aria-hidden="true">
+                      {BUILDING_ICON[type]}
+                    </span>
+                    <span className="flex items-center gap-1 text-xs font-semibold text-hx-ink">
+                      {locked && <span aria-hidden="true">🔒</span>}
+                      {type}
+                    </span>
+                    <span className="font-mono text-[10px] text-hx-ink-dim">{costLabel(cost)}</span>
+                    {/* [DEFAULT — direct feedback: "a lot of text doesn't have enough contrast
+                        to be readable"] Was text-hx-copper on this tile's neutral dark
+                        bg-hx-panel-2 — copper alone (not tinted) still measured well under
+                        WCAG's 4.5:1 here, and disabled:opacity-40 above only made it worse. */}
+                    {locked && <span className="text-[10px] font-semibold text-hx-gold-bright">{reasons.join(' · ')}</span>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInfoBuilding(type);
+                    }}
+                    title={`What does ${type} do?`}
+                    aria-label={`What does ${type} do?`}
+                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border border-hx-border-strong bg-hx-panel text-[10px] font-bold text-hx-ink-dim transition hover:border-hx-gold hover:text-hx-gold"
+                  >
+                    ?
+                  </button>
+                </div>
+              );
+            })}
+
+            <button
+              type="button"
+              disabled={!canBuild || roadMode || roadLocked}
+              title={roadLocked ? roadReasons.join(' · ') : roadConnectedCount > 0 ? `${roadConnectedCount} tile(s) already road-connected` : undefined}
+              onClick={onRoadArm}
+              className="flex w-full flex-col items-center gap-1 rounded-sm border border-hx-border bg-hx-panel-2 p-2.5 text-center transition hover:border-hx-gold/50 hover:bg-hx-panel disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span className="text-2xl leading-none" aria-hidden="true">
+                🛣️
+              </span>
+              <span className="flex items-center gap-1 text-xs font-semibold text-hx-ink">
+                {roadLocked && <span aria-hidden="true">🔒</span>}
+                Road
+              </span>
+              <span className="font-mono text-[10px] text-hx-ink-dim">{costLabel(roadCost)}</span>
+              {roadLocked && <span className="text-[10px] font-semibold text-hx-gold-bright">{roadReasons.join(' · ')}</span>}
+              {!roadLocked && roadConnectedCount > 0 && (
+                <span className="text-[10px] text-hx-moss">{roadConnectedCount} connected</span>
+              )}
+            </button>
+          </div>
+
+          {/* [DEFAULT — direct request: "Lay roads should not be an extra panel"] Only appears
+              once road mode is actually armed — this is live in-progress interaction feedback
+              (which hex is anchored, how to cancel), not a standing panel duplicating what the
+              grid tile above already says. */}
+          {roadMode && (
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-hx-gold/60 bg-hx-gold/10 px-2.5 py-1.5">
+              <p className="text-[11px] text-hx-ink">
+                {roadAnchor ? (
+                  <>
+                    Anchored at <span className="font-mono">({roadAnchor.q},{roadAnchor.r})</span> — click a highlighted neighbour to complete
+                    the segment.
+                  </>
+                ) : (
+                  <>Click a highlighted hex to anchor a road.</>
+                )}
+              </p>
+              <button type="button" onClick={onRoadCancel} className="shrink-0 font-mono text-[10px] font-semibold text-hx-ink-faint transition hover:text-hx-blood">
+                ✖ Cancel
+              </button>
             </div>
           )}
-
-          {/* [DEFAULT — UI feedback change, direct request: "this should also go in the buildings
-              panel" (re: the Roads & supply panel)] Merged in as the panel's final section — same
-              content the old standalone RoadPanel rendered, just nested here instead. */}
-          <div className="flex flex-col gap-2 border-t border-hx-border pt-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <h4 className="font-display text-xs font-bold text-hx-ink">🛣️ Roads &amp; supply</h4>
-              <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">
-                {roadConnectedCount > 0 ? `${roadConnectedCount} connected` : 'not connected'}
-              </span>
-            </div>
-
-            <p className="text-[11px] text-hx-ink-dim">
-              {roadConnectedCount > 0 ? (
-                <>
-                  <strong className="text-hx-gold">{roadConnectedCount}</strong> tile{roadConnectedCount === 1 ? '' : 's'} joined to your
-                  Capital — their stockpiles are collected straight into your wallet each round, no hero trip needed.
-                </>
-              ) : (
-                <>No tile is joined to your Capital yet. A chain of your own roads over your own tiles auto-collects everything along it each round.</>
-              )}
-            </p>
-
-            <p className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">
-              {costLabel(roadCost)} per segment · you hold {player.resources.Wood} Wood{roadCarried > 0 ? ` (+${roadCarried} carried)` : ''}
-            </p>
-
-            {!roadMode ? (
-              <button
-                type="button"
-                disabled={!canBuild || !roadAffordable || !anyRoadEdgeLeft}
-                onClick={onRoadArm}
-                className={BTN_SECONDARY}
-                title={
-                  !canAct
-                    ? 'Wait for your turn'
-                    : !isBuildPhase
-                      ? 'Roads can only be laid during the Build phase — advance to Phase 5 first'
-                      : !roadAffordable
-                        ? `Not enough Wood. You need ${roadWoodNeeded} Wood but only have ${player.resources.Wood}${roadCarried > 0 ? ` (${roadCarried} carried)` : ''}`
-                        : !anyRoadEdgeLeft
-                          ? 'Every eligible border already has a road'
-                          : undefined
-                }
-              >
-                🛠️ Lay a road ({costLabel(roadCost)})
-                {!isBuildPhase && <span className="text-hx-ink-faint"> — Build phase only</span>}
-                {/* [DEFAULT — direct feedback: "a lot of text doesn't have enough contrast to be
-                    readable"] Was text-hx-blood on this button's neutral bg-hx-panel-2 —
-                    measured well under WCAG's 4.5:1 minimum (blood is a muted red, not built
-                    for text-on-dark). */}
-                {isBuildPhase && !roadAffordable && <span className="text-hx-gold-bright"> — not enough Wood</span>}
-                {isBuildPhase && roadAffordable && !anyRoadEdgeLeft && <span className="text-hx-ink-faint"> — no free borders left</span>}
-              </button>
-            ) : (
-              <div className="flex flex-col gap-2 rounded-sm border border-hx-gold/60 bg-hx-gold/10 p-2">
-                <p className="text-[11px] text-hx-ink">
-                  {roadAnchor ? (
-                    <>
-                      Anchored at <span className="font-mono">({roadAnchor.q},{roadAnchor.r})</span> — click a highlighted neighbour to lay the
-                      segment along that border. Click the anchor again to drop it.
-                    </>
-                  ) : (
-                    <>Road mode armed — click a highlighted hex to anchor, then its neighbour. Each segment costs {costLabel(roadCost)}.</>
-                  )}
-                </p>
-                <button type="button" onClick={onRoadCancel} className={BTN_GHOST}>
-                  ✖ Done laying roads
-                </button>
-              </div>
-            )}
-          </div>
         </div>
       )}
 
