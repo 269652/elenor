@@ -23,17 +23,44 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { nanoid } from 'nanoid';
-import { applyAction, createGame, IllegalActionError, type Action, type GameState, type PlayerId } from '@/engine';
+import { applyAction, createGame, IllegalActionError, type Action, type GameState, type Player, type PlayerId } from '@/engine';
 import { useAiTurn } from '@/hooks/use-ai-turn';
 import { connectAsHost, type PeerRoomHandle } from '@/lib/webrtc/peer-room';
 import type { MediaConnection } from 'peerjs';
-import type { ChatMessage, LobbyPlayerInfo, VoicePeerInfo } from '@/lib/webrtc/protocol';
+import type { ChatMessage, LobbyPlayerInfo, ResumeLobbyPlayerInfo, VoicePeerInfo } from '@/lib/webrtc/protocol';
 import { generateRoomCode } from '@/lib/webrtc/protocol';
 import { clearHostSession, loadHostSession, saveHostSession, saveJoinSession } from '@/lib/webrtc/persistence';
+import type { SavedGame } from '@/lib/savedGames';
 
 export type P2PHostPhase =
   | { phase: 'connecting' }
   | { phase: 'lobby'; roomCode: string; players: LobbyPlayerInfo[]; canStart: boolean; startGame: () => void }
+  | {
+      /** [DEFAULT — direct request: "For WebRTC a client can also save the game and resume it
+       *  later as host .. it first shows the lobby where all players can connect again and then
+       *  the host can click a resume game button"] Sits between 'connecting' and 'active' ONLY
+       *  when this mount is resuming a SavedGame (see resumeFromSavedGame) rather than starting a
+       *  fresh room or reloading an already-active one — those two keep going straight to 'lobby'
+       *  / 'active' exactly as before, see useP2PHost's connect effect for the precedence rule. */
+      phase: 'resume-lobby';
+      roomCode: string;
+      /** Computed fresh every render from originalPlayersRef × playersRef × aiControlledRef —
+       *  same non-incremental-derivation pattern as 'active'/'lobby's own `players` field. */
+      players: ResumeLobbyPlayerInfo[];
+      aiControlledPlayerIds: ReadonlySet<PlayerId>;
+      /** Same callback as the 'active' phase's setSeatAiControl below — reused rather than a
+       *  second copy, it just broadcasts a resumeLobbyUpdate instead of a stateSync while the room
+       *  is still in this phase (there's no live GameState to sync yet). */
+      setSeatAiControl: (playerId: PlayerId, isAI: boolean) => void;
+      /** The HOST'S OWN claim of one of the original seats — no network round trip needed, unlike
+       *  a joiner's claim (see hooks/use-p2p-join.ts's claimSeat), because the host already IS the
+       *  authority writing playersRef directly. */
+      claimSeatForSelf: (playerId: PlayerId) => void;
+      /** Host-only "go" button — ends the resume-lobby and starts the room playing for real, with
+       *  whichever seats got claimed/AI-toggled and however many are still ghosts (deliberately
+       *  not blocked on every seat being claimed — see components/p2p/ResumeHostLobby.tsx). */
+      resumeGame: () => void;
+    }
   | {
       phase: 'active';
       roomCode: string;
@@ -98,12 +125,18 @@ function stableVoiceInitiator(a: PlayerId, b: PlayerId): boolean {
   return a < b;
 }
 
-export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = {}): P2PHostPhase {
+export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = {}, resumeFromSavedGame?: SavedGame): P2PHostPhase {
   // [DEFAULT — direct request: "if the host reloads the tab it should be restored after reload
   // and let the clients reconnect to resume session"] Read once, at first mount — the whole
   // point of a lazy initializer here is that a persisted session (if any) governs THIS mount's
   // identity/room code from the very first render, not just after some later effect catches up.
   const [resumed] = useState(() => loadHostSession());
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // Also read once, at first mount, same reasoning as `resumed` above — and, per the direct
+  // request's own precedence ("resumed" from an ordinary reload always wins over a genuinely new
+  // resume-from-save, mirroring how `resumed` already outranks the `hostInfo` prop), only actually
+  // captured when there's no `resumed` session to take priority over it.
+  const [resumeSave] = useState(() => (resumed ? null : resumeFromSavedGame ?? null));
   // Stable across the whole hook lifetime — minted once, never re-derived from render state, so
   // it survives every lobby roster / game-state update below without churn. A lazy useState
   // initializer, not useRef(...).current — this project's react-hooks rules (react-hooks/refs)
@@ -124,10 +157,26 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   // (StrictMode's throwaway mount, or a genuine rapid reconnect) is naturally idempotent: setting
   // the same key twice is a no-op change, not a duplicate entry.
   const playersRef = useRef(new Map<PlayerId, LobbyPlayerInfo>());
-  // [DEFAULT — host reload restore] Seeded from the persisted session, if any, so a mid-game
-  // reload has its authoritative state back from the very first render — not just after the
-  // connect effect below gets around to it.
-  const gameStateRef = useRef<GameState | null>(resumed?.gameState ?? null); // authoritative — mutated only via applyAction
+  // [DEFAULT — host reload restore, direct request: "a client can also save the game and resume
+  // it later as host"] Seeded from the persisted session if reloading, else from a SavedGame if
+  // resuming one, so either way the authoritative state is back from the very first render — not
+  // just after the connect effect below gets around to it. `resumed` still wins over `resumeSave`
+  // (see that state's own comment) — this is just the ref-level consequence of that precedence.
+  const gameStateRef = useRef<GameState | null>(resumed?.gameState ?? resumeSave?.state ?? null); // authoritative — mutated only via applyAction
+  // [DEFAULT — direct request: "switch a player from human to AI in case you're resuming a game
+  // with less players than you started it"] originalPlayersRef holds the full roster the SAVED
+  // game actually had (id/name/color straight off GameState.players) — the fixed, never-changing
+  // reference the 'resume-lobby' phase's ghost roster (computeResumeRoster, in the connect effect
+  // below) is built from. Only ever populated when resuming a save with no reload session to take
+  // priority (see resumeSave above) — a fresh lobby or reload-resume never has an "original"
+  // roster in this sense, they just have playersRef/lobbyPlayers.
+  const originalPlayersRef = useRef<Player[]>(resumeSave?.state.players ?? []);
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // Tracks P2PHostPhase's OWN discriminant from inside closures that must not read the `phase`
+  // React state directly — onJoinerConnected (below) is captured once when the connect effect
+  // runs and would otherwise see a permanently stale value, exactly like gameStateRef/playersRef
+  // already need ref-indirection for the same reason. Updated alongside every setPhase(...) call.
+  const phaseRef = useRef<'connecting' | 'lobby' | 'resume-lobby' | 'active' | 'error'>('connecting');
   // Set inside the connect effect once the resolved room code (and this seat's effective
   // name/color) are known, then called from every state-mutating path — including dispatch/
   // startGame below, which are declared outside the effect via useCallback and would otherwise
@@ -139,6 +188,11 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   // to also be callable from kickPlayer, which — like dispatch/startGame — is a useCallback
   // declared outside the effect. Same ref-indirection pattern as persistRef.
   const syncLobbyStateRef = useRef<() => LobbyPlayerInfo[]>(() => []);
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // Same reasoning/pattern as syncLobbyStateRef immediately above, for the 'resume-lobby' phase's
+  // own roster — needed by claimSeatForSelf/resumeGame/setSeatAiControl, all useCallbacks declared
+  // outside the connect effect.
+  const syncResumeLobbyStateRef = useRef<() => ResumeLobbyPlayerInfo[]>(() => []);
   // [DEFAULT — direct request: "kick a player"] A kicked player who simply redials the same room
   // code (their own existing reconnect loop, hooks/use-p2p-join.ts, has no idea they were kicked)
   // would otherwise just walk right back in — checked in onJoinerConnected below, before they're
@@ -150,13 +204,24 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   // the authoritative side of a P2P game instead of client-side pass-and-play. Not persisted
   // across a host reload (resets to "everyone human-controlled") — a disclosed, minor gap, not a
   // regression of anything that worked before this feature existed.
-  const aiControlledRef = useRef(new Set<PlayerId>());
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // DOES seed from a SavedGame's own aiControlledPlayerIds, though (when genuinely resuming one,
+  // i.e. `resumed` didn't already win) — unlike a reload, a resume-from-save is the FIRST time
+  // this device has ever hosted this room, so there's no "reset to human" regression to worry
+  // about; the save's own AI status is the only prior status that exists at all.
+  const aiControlledRef = useRef(new Set<PlayerId>(resumeSave ? resumeSave.aiControlledPlayerIds ?? [] : []));
   // [DEFAULT — direct request: "transfer hosting to another player"] This device's OWN effective
   // name/color, captured once the connect effect resolves them — transferHostTo needs these to
   // seed its own post-handoff join session, but effectiveName/effectiveColor are otherwise local
   // consts scoped to the effect below.
   const effectiveNameRef = useRef(hostInfo.name);
   const effectiveColorRef = useRef(hostInfo.color);
+  // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"]
+  // Mirrors selfSeatId (React state, below) for use inside the connect effect's closures — same
+  // ref-indirection reason as everything else here, and specifically needed by relayChatRef so a
+  // host who claimed a DIFFERENT seat than its raw myPlayerId still gets its own chat messages
+  // attributed (and its unread-count check evaluated) against the seat it's actually playing as.
+  const selfSeatIdRef = useRef<PlayerId | null>(null);
   // [DEFAULT — direct request: "a little chat in a second tab of sidebar"] Set inside the effect
   // once playersRef/handleRef are live — called from BOTH onJoinerMessage's 'chatSend' branch
   // (someone else's message) and sendChat below (this device's own), so both paths stamp
@@ -175,11 +240,34 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     callbacksRef.current = callbacks;
   });
 
-  const [phase, setPhase] = useState<'connecting' | 'lobby' | 'active' | 'error'>('connecting');
+  const [phase, setPhase] = useState<'connecting' | 'lobby' | 'resume-lobby' | 'active' | 'error'>('connecting');
   const [roomCode, setRoomCode] = useState('');
   const [lobbyPlayers, setLobbyPlayers] = useState<LobbyPlayerInfo[]>([]);
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // React-visible mirror of computeResumeRoster() (defined in the connect effect below) — same
+  // recompute-fresh-every-time relationship to originalPlayersRef/playersRef/aiControlledRef that
+  // lobbyPlayers already has to playersRef.
+  const [resumeLobbyPlayers, setResumeLobbyPlayers] = useState<ResumeLobbyPlayerInfo[]>([]);
+  // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"] Which
+  // original seat THIS DEVICE (the host) has claimed for itself in a resume-lobby — see
+  // claimSeatForSelf below. Deliberately separate from `myPlayerId` (the stable nanoid identifying
+  // this device's underlying Peer/session, never reseated) rather than reusing it directly: a
+  // fresh lobby or reload-resume host has no "claim" step at all, so this simply stays null for
+  // them forever and every place that used to mean "this device's controllable seat" by reading
+  // myPlayerId now reads `selfSeatId ?? myPlayerId` instead — for those two flows selfSeatId is
+  // never set, so the fallback always resolves to the exact same value myPlayerId already was,
+  // reproducing their existing behavior byte-for-byte.
+  const [selfSeatId, setSelfSeatId] = useState<PlayerId | null>(null);
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // Deliberately NOT seeded from resumeSave (unlike gameStateRef above) — this is the value
+  // useAiTurn below watches, and until resumeGame() actually fires, we're still in the ghost-
+  // picker phase: an AI-controlled seat that happened to be mid-turn in the save must not start
+  // auto-dispatching (and, via dispatch's own persistRef.current() call, silently persisting a
+  // host session) before the host has even clicked Resume Game.
   const [gameState, setGameState] = useState<GameState | null>(resumed?.gameState ?? null);
-  const [aiControlledPlayerIds, setAiControlledPlayerIds] = useState<ReadonlySet<PlayerId>>(new Set());
+  const [aiControlledPlayerIds, setAiControlledPlayerIds] = useState<ReadonlySet<PlayerId>>(
+    new Set(resumeSave?.aiControlledPlayerIds ?? [])
+  );
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
@@ -301,6 +389,32 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     }
     syncLobbyStateRef.current = syncLobbyState;
 
+    /** [DEFAULT — direct request: "the lobby should display the original players slightly
+     *  transparent .. it's also possible to switch a player from human to AI"] The fixed roster
+     *  from the save (originalPlayersRef) crossed with who has actually claimed/AI'd each seat SO
+     *  FAR in this resume attempt (playersRef/aiControlledRef) — recomputed fresh every call, same
+     *  non-incremental style as syncLobbyState above, for the same reason (see this file's header
+     *  comment on why playersRef/refs are the source of truth, not a carried-forward `prev`). */
+    function computeResumeRoster(): ResumeLobbyPlayerInfo[] {
+      return originalPlayersRef.current.map((original): ResumeLobbyPlayerInfo => {
+        const claimant = playersRef.current.get(original.id);
+        if (claimant) {
+          return { playerId: original.id, name: original.name, color: original.color, isHost: claimant.isHost, status: 'connected' };
+        }
+        if (aiControlledRef.current.has(original.id)) {
+          return { playerId: original.id, name: original.name, color: original.color, isHost: false, status: 'ai' };
+        }
+        return { playerId: original.id, name: original.name, color: original.color, isHost: false, status: 'ghost' };
+      });
+    }
+
+    function syncResumeLobbyState(): ResumeLobbyPlayerInfo[] {
+      const list = computeResumeRoster();
+      setResumeLobbyPlayers(list);
+      return list;
+    }
+    syncResumeLobbyStateRef.current = syncResumeLobbyState;
+
     function currentVoicePeers(localHandle: PeerRoomHandle): VoicePeerInfo[] {
       const peers: VoicePeerInfo[] = [{ playerId: myPlayerId, peerId: localHandle.selfId }];
       for (const [peerId, pid] of peerIdToPlayerId.current.entries()) {
@@ -327,18 +441,64 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             const activeHandle = handleRef.current ?? handle;
 
             if (meta.probe) {
-              const roster = [...playersRef.current.values()];
-              activeHandle.send(peerId, { kind: 'lobbyUpdate', players: roster });
+              // [DEFAULT — direct request: "a client can also save the game and resume it later
+              // as host"] A probe during resume-lobby needs the ghost roster, not the ordinary
+              // waiting-room one — this is what lets the join-setup screen's probeLobby call
+              // (lib/webrtc/peer-room.ts) tell the two cases apart before the user commits.
+              if (phaseRef.current === 'resume-lobby') {
+                activeHandle.send(peerId, { kind: 'resumeLobbyUpdate', players: computeResumeRoster() });
+              } else {
+                const roster = [...playersRef.current.values()];
+                activeHandle.send(peerId, { kind: 'lobbyUpdate', players: roster });
+              }
               setTimeout(() => activeHandle.disconnectPeer(peerId), 100);
               return;
             }
             // [DEFAULT — direct request: "kick a player"] Checked before anything else touches
             // the roster — a kicked player's own reconnect loop (hooks/use-p2p-join.ts) has no
             // idea they were kicked and will just redial the same room code; this is what stops
-            // that from silently walking them back in.
+            // that from silently walking them back in. Applies in every phase, including
+            // resume-lobby (checked below).
             if (bannedPlayerIds.current.has(meta.playerId)) {
               activeHandle.send(peerId, { kind: 'kicked', reason: 'Removed by the host' });
               setTimeout(() => activeHandle.disconnectPeer(peerId), 250);
+              return;
+            }
+
+            // [DEFAULT — direct request: "the lobby should display the original players slightly
+            // transparent and with a connect button so each player can simply connect to its old
+            // player .. it's important to use the exact same name as before"] Resume-lobby has its
+            // own claim/reconnect/ghost-peek logic, entirely separate from the ordinary lobby's
+            // duplicate-name/duplicate-color rules below — those don't apply here at all, nobody
+            // types a name for this path (see components/p2p/ResumeJoinLobby.tsx).
+            if (phaseRef.current === 'resume-lobby') {
+              peerIdToPlayerId.current.set(peerId, meta.playerId);
+              const originalSeat = originalPlayersRef.current.find((p) => p.id === meta.playerId);
+              const alreadyClaimed = playersRef.current.has(meta.playerId);
+              if (originalSeat && !alreadyClaimed) {
+                // A genuine claim — this stable id matches a real seat from the save and nobody
+                // has it yet. Name/color come from the ORIGINAL save, never from meta — the
+                // joiner's screen never even collects a name/color for this path (see
+                // components/p2p/ResumeJoinLobby.tsx), but even if it somehow sent one, the save's
+                // own identity is authoritative here.
+                playersRef.current.set(meta.playerId, { playerId: meta.playerId, name: originalSeat.name, color: originalSeat.color, isHost: false });
+                aiControlledRef.current.delete(meta.playerId); // claiming means a human took over
+                setAiControlledPlayerIds(new Set(aiControlledRef.current));
+                activeHandle.broadcast({ kind: 'resumeLobbyUpdate', players: syncResumeLobbyState() });
+              } else if (originalSeat && alreadyClaimed) {
+                // Reconnect for a seat this same stable id already claimed (a dropped connection,
+                // a StrictMode throwaway mount) — idempotent, peerIdToPlayerId is already updated
+                // above and nothing about the roster ACTUALLY changed, so no broadcast to anyone
+                // else — but THIS connection still gets its own fresh snapshot directly (mirrors
+                // the mid-game reconnect branch below, which always resends stateSync on reconnect
+                // rather than assuming the reconnecting client's own state is still current).
+                activeHandle.send(peerId, { kind: 'resumeLobbyUpdate', players: computeResumeRoster() });
+              } else {
+                // A fresh id, no ghost picked yet — every joiner's FIRST connection in this flow
+                // looks like this. Just address them directly with the current roster so their own
+                // screen can render the ghost picker; nothing to broadcast to anyone else.
+                activeHandle.send(peerId, { kind: 'resumeLobbyUpdate', players: computeResumeRoster() });
+              }
               return;
             }
 
@@ -400,6 +560,14 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             if (!stablePlayerId) return; // shouldn't happen — onJoinerConnected always runs first
 
             if (message.kind === 'requestSync') {
+              // [DEFAULT — direct request: "a client can also save the game and resume it later
+              // as host"] hooks/use-p2p-join.ts sends this unconditionally right after connecting
+              // — including a fresh connection during resume-lobby, before any seat is claimed.
+              // Answering with a real stateSync there would flip that joiner's phase straight to
+              // 'active' (see its own stateSync case) and skip the ghost picker entirely; the
+              // resumeLobbyUpdate onJoinerConnected already sent them moments earlier is the
+              // correct — and sufficient — response for this phase, so there is nothing more to do.
+              if (phaseRef.current === 'resume-lobby') return;
               if (gameStateRef.current) {
                 handleRef.current?.send(peerId, {
                   kind: 'stateSync',
@@ -414,6 +582,14 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
               return;
             }
             if (message.kind !== 'action') return;
+            // [DEFAULT — direct request: "a client can also save the game and resume it later as
+            // host"] gameStateRef.current is ALREADY populated during resume-lobby (seeded from
+            // the save) — unlike the "arrived before the game started" case just below, this isn't
+            // about the state being absent, it's about the room not having actually resumed play
+            // yet. No legitimate client sends 'action' from the ghost-picker screen at all (see
+            // components/p2p/ResumeJoinLobby.tsx), so this only ever guards against a stale/
+            // malformed one.
+            if (phaseRef.current === 'resume-lobby') return;
             const current = gameStateRef.current;
             if (!current) return; // action arrived before the game started — ignore
             // Never trust actorId from the wire alone — mirrors server/game-server.ts's
@@ -494,7 +670,6 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
         const effectiveColor = resumed?.color ?? hostInfo.color;
         effectiveNameRef.current = effectiveName;
         effectiveColorRef.current = effectiveColor;
-        playersRef.current.set(myPlayerId, { playerId: myPlayerId, name: effectiveName, color: effectiveColor, isHost: true });
         voicePeersRef.current = [{ playerId: myPlayerId, peerId: handle.selfId }];
 
         persistRef.current = () => {
@@ -506,7 +681,6 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             gameState: gameStateRef.current,
           });
         };
-        persistRef.current();
 
         // [DEFAULT — direct request: "a little chat"] text/500-char cap is defensive against a
         // malformed/hostile peer, not a real UX limit — see ChatMessage's own comment for why
@@ -524,21 +698,54 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             sentAt: Date.now(),
           };
           setChatMessages((prev) => [...prev, msg]);
-          if (fromPlayerId !== myPlayerId) setUnreadChatCount((n) => n + 1);
+          // selfSeatIdRef.current ?? myPlayerId, not raw myPlayerId — see that ref's own comment.
+          if (fromPlayerId !== (selfSeatIdRef.current ?? myPlayerId)) setUnreadChatCount((n) => n + 1);
           handleRef.current?.broadcast({ kind: 'chatMessage', message: msg });
         };
 
-        if (gameStateRef.current) {
-          // Resumed mid-game: the lobby is long over, go straight back to the board. The old
-          // roster snapshot isn't restored into playersRef — clients reconnect on their own
-          // retry loop (hooks/use-p2p-join.ts) and re-announce themselves via onJoinerConnected
-          // above, which already re-sends stateSync to anyone recognized once gameStateRef is set.
-          setGameState(gameStateRef.current);
+        if (resumed) {
+          // Reload of an already-active-or-hosting room — completely unchanged behavior from
+          // before resume-lobby existed (this branch never touches originalPlayersRef/resumeSave).
+          playersRef.current.set(myPlayerId, { playerId: myPlayerId, name: effectiveName, color: effectiveColor, isHost: true });
+          persistRef.current();
+          if (gameStateRef.current) {
+            // Resumed mid-game: the lobby is long over, go straight back to the board. The old
+            // roster snapshot isn't restored into playersRef — clients reconnect on their own
+            // retry loop (hooks/use-p2p-join.ts) and re-announce themselves via onJoinerConnected
+            // above, which already re-sends stateSync to anyone recognized once gameStateRef is set.
+            setGameState(gameStateRef.current);
+            broadcastVoicePeers(handle);
+            phaseRef.current = 'active';
+            setPhase('active');
+          } else {
+            syncLobbyState();
+            broadcastVoicePeers(handle);
+            phaseRef.current = 'lobby';
+            setPhase('lobby');
+          }
+        } else if (resumeSave) {
+          // [DEFAULT — direct request: "a client can also save the game and resume it later as
+          // host .. it first shows the lobby where all players can connect again and then the
+          // host can click a resume game button"] gameStateRef/aiControlledRef were already seeded
+          // from resumeSave at ref-creation time above — this just brings the React-visible
+          // mirrors in line and puts the room into the ghost-picker phase instead of jumping
+          // straight to 'active' (a reload would) or an empty 'lobby' (a fresh host would).
+          // playersRef stays EMPTY here — unlike the two branches above, the host's own seat is
+          // NOT auto-claimed; see claimSeatForSelf for how the host picks one of the original
+          // seats for themself, same as any other joiner picks one. persistRef is intentionally
+          // NOT invoked yet — see resumeGame() below, which is the point a resumed room actually
+          // becomes reload-resumable, same as any other active hosted game becomes.
+          setAiControlledPlayerIds(new Set(aiControlledRef.current));
+          syncResumeLobbyState();
           broadcastVoicePeers(handle);
-          setPhase('active');
+          phaseRef.current = 'resume-lobby';
+          setPhase('resume-lobby');
         } else {
+          playersRef.current.set(myPlayerId, { playerId: myPlayerId, name: effectiveName, color: effectiveColor, isHost: true });
+          persistRef.current();
           syncLobbyState();
           broadcastVoicePeers(handle);
+          phaseRef.current = 'lobby';
           setPhase('lobby');
         }
       } catch (err) {
@@ -569,6 +776,7 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     );
     gameStateRef.current = initial;
     setGameState(initial);
+    phaseRef.current = 'active';
     setPhase('active');
     persistRef.current();
     handleRef.current?.broadcast({ kind: 'gameStarted', state: initial, aiControlledPlayerIds: [...aiControlledRef.current] });
@@ -606,10 +814,69 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
     else aiControlledRef.current.delete(playerId);
     const next = new Set(aiControlledRef.current);
     setAiControlledPlayerIds(next);
+    // [DEFAULT — direct request: "it's also possible to switch a player from human to AI in case
+    // you're resuming a game with less players than you started it"] Reused as-is for the
+    // 'resume-lobby' phase (see P2PHostPhase's own comment on this field) — but there's no live
+    // GameState to stateSync yet in that phase, even though gameStateRef.current is ALREADY
+    // non-null there (seeded from the save) — phaseRef, not gameStateRef, is what actually
+    // distinguishes "resuming, not yet playing" from "genuinely active" here.
+    if (phaseRef.current === 'resume-lobby') {
+      handleRef.current?.broadcast({ kind: 'resumeLobbyUpdate', players: syncResumeLobbyStateRef.current() });
+      return;
+    }
     if (gameStateRef.current) {
       handleRef.current?.broadcast({ kind: 'stateSync', state: gameStateRef.current, aiControlledPlayerIds: [...next] });
     }
   }, []);
+
+  // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"] The
+  // HOST'S OWN claim of an original seat — unlike a joiner's claimSeat (hooks/use-p2p-join.ts),
+  // this needs no network round trip at all: the host already IS the authority that writes
+  // playersRef directly for everyone else's claims too (see onJoinerConnected's resume-lobby
+  // branch above), so claiming for itself is just... doing that, locally, then telling everyone.
+  const claimSeatForSelf = useCallback(
+    (playerId: PlayerId) => {
+      const original = originalPlayersRef.current.find((p) => p.id === playerId);
+      if (!original) return; // defensive — the UI only ever offers seats that are really ghosts
+      setSelfSeatId((previous) => {
+        if (previous && previous !== playerId) playersRef.current.delete(previous);
+        return playerId;
+      });
+      selfSeatIdRef.current = playerId;
+      playersRef.current.set(playerId, { playerId, name: original.name, color: original.color, isHost: true });
+      aiControlledRef.current.delete(playerId); // claiming means a human (the host) took over
+      setAiControlledPlayerIds(new Set(aiControlledRef.current));
+      handleRef.current?.broadcast({ kind: 'resumeLobbyUpdate', players: syncResumeLobbyStateRef.current() });
+    },
+    []
+  );
+
+  // [DEFAULT — direct request: "the host can click a resume game button"] Host-only "go" button
+  // for the 'resume-lobby' phase — ends it and starts the room playing for real, with whichever
+  // seats got claimed/AI-toggled and however many are still ghosts (deliberately not blocked on
+  // every seat being claimed — see components/p2p/ResumeHostLobby.tsx's own comment on why).
+  const resumeGame = useCallback(() => {
+    if (!resumeSave) return; // defensive — only meaningful in the resume-lobby phase
+    // Already seeded at ref-creation time, but explicit/defensive here too — this is the moment
+    // the room actually commits to playing, so there is no ambiguity left about what "the current
+    // state" means from here on.
+    gameStateRef.current = resumeSave.state;
+    setGameState(gameStateRef.current);
+    // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"]
+    // The 'active' phase exposes `players: lobbyPlayers` (LobbyPlayerInfo[], for AdminMenu/
+    // ChatPanel) — but lobbyPlayers was never populated during resume-lobby (that phase syncs
+    // resumeLobbyPlayers instead, a different shape entirely). playersRef itself IS already
+    // correct (every claim, including the host's own via claimSeatForSelf, wrote straight into
+    // it), so this just brings the React-visible mirror in line before anything downstream reads it.
+    syncLobbyStateRef.current();
+    phaseRef.current = 'active';
+    setPhase('active');
+    // From here on this is an ordinary active hosted game in every respect — including being
+    // reload-resumable exactly like any other one, which is why persistRef is only invoked NOW
+    // (see the resumeSave branch in the connect effect above for why it was withheld until here).
+    persistRef.current();
+    handleRef.current?.broadcast({ kind: 'gameStarted', state: gameStateRef.current, aiControlledPlayerIds: [...aiControlledRef.current] });
+  }, [resumeSave]);
 
   const kickPlayer = useCallback((playerId: PlayerId) => {
     bannedPlayerIds.current.add(playerId);
@@ -666,7 +933,9 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
 
   const sendChat = useCallback(
     (text: string) => {
-      relayChatRef.current(text, myPlayerId);
+      // selfSeatIdRef.current ?? myPlayerId — see that ref's own comment for why (host chatting
+      // after claiming a resumed seat other than its raw identity).
+      relayChatRef.current(text, selfSeatIdRef.current ?? myPlayerId);
     },
     [myPlayerId]
   );
@@ -713,15 +982,24 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   if (phase === 'lobby') {
     return { phase: 'lobby', roomCode, players: lobbyPlayers, canStart: lobbyPlayers.length >= MIN_PLAYERS && lobbyPlayers.length <= MAX_PLAYERS, startGame };
   }
+  if (phase === 'resume-lobby') {
+    return { phase: 'resume-lobby', roomCode, players: resumeLobbyPlayers, aiControlledPlayerIds, setSeatAiControl, claimSeatForSelf, resumeGame };
+  }
   // phase === 'active'
+  // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"] The
+  // seat THIS DEVICE actually plays as — selfSeatId once a resume-lobby claim has happened,
+  // otherwise myPlayerId itself (a fresh lobby / reload-resume host never touches selfSeatId, so
+  // this is always exactly the pre-existing value for those two flows — see selfSeatId's own
+  // comment above for why that reproduces their behavior byte-for-byte).
+  const effectiveSelfId = selfSeatId ?? myPlayerId;
   return {
     phase: 'active',
     roomCode,
     state: gameState!,
     dispatch,
     error,
-    isMyTurn: gameState!.currentPlayerId === myPlayerId && !aiControlledPlayerIds.has(myPlayerId),
-    myPlayerId,
+    isMyTurn: gameState!.currentPlayerId === effectiveSelfId && !aiControlledPlayerIds.has(effectiveSelfId),
+    myPlayerId: effectiveSelfId,
     players: lobbyPlayers,
     aiControlledPlayerIds,
     setSeatAiControl,

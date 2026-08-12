@@ -13,12 +13,25 @@ import { nanoid } from 'nanoid';
 import { applyAction, IllegalActionError, type Action, type GameState, type PlayerId } from '@/engine';
 import { connectAsJoiner, type PeerRoomHandle } from '@/lib/webrtc/peer-room';
 import type { MediaConnection } from 'peerjs';
-import type { ChatMessage, LobbyPlayerInfo, VoicePeerInfo } from '@/lib/webrtc/protocol';
+import type { ChatMessage, LobbyPlayerInfo, ResumeLobbyPlayerInfo, VoicePeerInfo } from '@/lib/webrtc/protocol';
 import { clearJoinSession, saveHostSession } from '@/lib/webrtc/persistence';
 
 export type P2PJoinPhase =
   | { phase: 'connecting' }
   | { phase: 'lobby'; players: LobbyPlayerInfo[] }
+  | {
+      /** [DEFAULT — direct request: "it first shows the lobby where all players can connect
+       *  again .. no need to enter a name again; just use one of the players"] The joiner-side
+       *  mirror of hooks/use-p2p-host.ts's identical phase — arrives whenever the host is resuming
+       *  a saved game instead of running an ordinary from-scratch lobby (see that file's
+       *  P2PHostPhase for the host-side half of this). */
+      phase: 'resume-lobby';
+      players: ResumeLobbyPlayerInfo[];
+      /** null until THIS device has claimed a seat (via claimSeat below) — nothing in the roster
+       *  should render as "you" before that. */
+      myPlayerId: PlayerId | null;
+      claimSeat: (playerId: PlayerId, name: string, color: string) => void;
+    }
   | {
       phase: 'active';
       state: GameState;
@@ -93,13 +106,29 @@ function stablePlayerIdFor(roomCode: string): string {
 }
 
 export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2PJoinCallbacks = {}): P2PJoinPhase {
-  // Lazy useState initializer, not useRef(...).current — see use-p2p-host.ts's identical comment
-  // on why (this project's react-hooks/refs rule forbids reading a ref during render).
-  const [myPlayerId] = useState(() => stablePlayerIdFor(roomCode));
+  // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"] A
+  // REAL useState now, not lazy-init-only — claimSeat below calls its setter to switch this
+  // device's identity from its anonymous probing id to a chosen original seat's id. Still a lazy
+  // initializer for the SAME reason it always was (see use-p2p-host.ts's identical comment on
+  // react-hooks/refs): only the FIRST render's value needs to come from sessionStorage, never
+  // re-derived afterward.
+  const [myPlayerId, setMyPlayerId] = useState(() => stablePlayerIdFor(roomCode));
   const handleRef = useRef<PeerRoomHandle | null>(null);
   const gameStateRef = useRef<GameState | null>(null);
   const reconnectAttemptRef = useRef(0);
   const lobbyPlayersRef = useRef<LobbyPlayerInfo[]>([]);
+  // [DEFAULT — direct request: "the lobby should display the original players slightly
+  // transparent .. connect button"] Same recompute-fresh-every-time mirror relationship to
+  // resumeLobbyPlayers (React state, below) that lobbyPlayersRef already has to lobbyPlayers.
+  const resumeLobbyPlayersRef = useRef<ResumeLobbyPlayerInfo[]>([]);
+  // [DEFAULT — direct request: "transfer hosting to another player"] Mirrors use-p2p-host.ts's
+  // identical pair — myInfo.name/color are only this device's DEFAULT identity now (used until a
+  // resume-lobby claim overrides them, see claimSeat below); connect() inside the effect reads
+  // these refs instead of the myInfo prop directly so a claim can retarget them without needing
+  // myInfo itself in the effect's dependency array (which would tear the connection down on every
+  // parent re-render, not just a genuine identity change).
+  const effectiveNameRef = useRef(myInfo.name);
+  const effectiveColorRef = useRef(myInfo.color);
   const voicePeersRef = useRef<VoicePeerInfo[]>([]);
   const voiceCallsRef = useRef(new Map<PlayerId, MediaConnection>());
   const voiceRemoteRef = useRef(new Map<PlayerId, MediaStream>());
@@ -118,8 +147,9 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
     callbacksRef.current = callbacks;
   });
 
-  const [phase, setPhase] = useState<'connecting' | 'lobby' | 'active' | 'error'>('connecting');
+  const [phase, setPhase] = useState<'connecting' | 'lobby' | 'resume-lobby' | 'active' | 'error'>('connecting');
   const [lobbyPlayers, setLobbyPlayers] = useState<LobbyPlayerInfo[]>([]);
+  const [resumeLobbyPlayers, setResumeLobbyPlayers] = useState<ResumeLobbyPlayerInfo[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [aiControlledPlayerIds, setAiControlledPlayerIds] = useState<ReadonlySet<PlayerId>>(new Set());
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -237,7 +267,12 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
     function connect() {
       connectAsJoiner(
         roomCode,
-        { name: myInfo.name, color: myInfo.color, playerId: myPlayerId },
+        // [DEFAULT — direct request: "no need to enter a name again; just use one of the
+        // players"] Read through the refs, not myInfo directly — see effectiveNameRef/
+        // effectiveColorRef's own comment above for why (claimSeat overrides these before the
+        // reconnect this effect's [roomCode, myPlayerId] deps triggers). myPlayerId itself stays
+        // read straight from the closure/state, same as always.
+        { name: effectiveNameRef.current, color: effectiveColorRef.current, playerId: myPlayerId },
         {
           onHostMessage(message) {
             if (cancelled) return;
@@ -253,6 +288,17 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
                 setLobbyPlayers(message.players);
                 setPhase((p) => (p === 'connecting' ? 'lobby' : p));
                 refreshRemoteVoiceStreams();
+                break;
+              case 'resumeLobbyUpdate':
+                // [DEFAULT — direct request: "it first shows the lobby where all players can
+                // connect again"] Unlike lobbyUpdate's guarded transition above, this is set
+                // UNCONDITIONALLY — receiving this message at all means the room genuinely is in
+                // resume-lobby mode regardless of what phase this device thought it was in a
+                // moment ago (e.g. reconnecting after a claim, or a stray late 'lobbyUpdate'-phase
+                // assumption from before the very first message ever arrived).
+                resumeLobbyPlayersRef.current = message.players;
+                setResumeLobbyPlayers(message.players);
+                setPhase('resume-lobby');
                 break;
               case 'gameStarted':
                 gameStateRef.current = message.state;
@@ -302,7 +348,17 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
                 // control to the caller to actually switch screens.
                 if (message.toPlayerId === myPlayerId) {
                   clearJoinSession();
-                  saveHostSession({ roomCode, hostPlayerId: myPlayerId, name: myInfo.name, color: myInfo.color, gameState: gameStateRef.current });
+                  // effectiveNameRef/effectiveColorRef, not myInfo directly — if this device
+                  // claimed a resumed seat under a different name/color than it originally typed
+                  // (see claimSeat below), those refs hold the identity that's actually correct
+                  // for this seat; myInfo would be stale for that case.
+                  saveHostSession({
+                    roomCode,
+                    hostPlayerId: myPlayerId,
+                    name: effectiveNameRef.current,
+                    color: effectiveColorRef.current,
+                    gameState: gameStateRef.current,
+                  });
                   callbacksRef.current.onBecameHost?.();
                 }
                 break;
@@ -377,6 +433,30 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, myPlayerId]);
 
+  // [DEFAULT — direct request: "the lobby should display the original players slightly
+  // transparent and with a connect button so each player can simply connect to its old player in
+  // the game .. no need to enter a name again; just use one of the players"] A joiner "claims" a
+  // ghost seat by closing its current (anonymous, freshly-generated) connection and reconnecting
+  // with THAT seat's playerId instead — this reuses onJoinerConnected on the host side entirely,
+  // no separate "claim" protocol message needed. Persisting the chosen id under the SAME
+  // sessionStorage key stablePlayerIdFor already uses means a later reload of this same tab picks
+  // the claimed seat back up automatically, exactly like an ordinary joiner's reload already does.
+  const claimSeat = useCallback(
+    (playerId: PlayerId, name: string, color: string) => {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(`hexrealms-p2p-playerid-${roomCode}`, playerId);
+      }
+      effectiveNameRef.current = name;
+      effectiveColorRef.current = color;
+      // Changing myPlayerId is the whole trigger: the connect effect above depends on
+      // [roomCode, myPlayerId], so its existing cleanup tears down the current (anonymous)
+      // connection and connect() re-runs with the new identity/metadata — no manual close/
+      // reconnect calls needed here, this falls out of the existing effect-dependency design.
+      setMyPlayerId(playerId);
+    },
+    [roomCode]
+  );
+
   const dispatch = useCallback(
     (action: Action): boolean => {
       const current = gameStateRef.current;
@@ -446,6 +526,14 @@ export function useP2PJoin(roomCode: string, myInfo: JoinInfo, callbacks: UseP2P
   if (fatal) return { phase: 'error', message: fatal };
   if (phase === 'connecting') return { phase: 'connecting' };
   if (phase === 'lobby') return { phase: 'lobby', players: lobbyPlayers };
+  if (phase === 'resume-lobby') {
+    // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"]
+    // myPlayerId only counts as "claimed" once it actually shows up in the roster the host sent
+    // back — before that it's still this device's anonymous probing identity, which was never a
+    // real seat in the save and has no entry here to match.
+    const claimedSeat = resumeLobbyPlayers.some((p) => p.playerId === myPlayerId) ? myPlayerId : null;
+    return { phase: 'resume-lobby', players: resumeLobbyPlayers, myPlayerId: claimedSeat, claimSeat };
+  }
   return {
     phase: 'active',
     state: gameState!,

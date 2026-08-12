@@ -37,7 +37,10 @@ import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from 
 import { useAiTurn } from '@/hooks/use-ai-turn';
 import { AdminMenu } from '@/components/p2p/AdminMenu';
 import { ChatPanel } from '@/components/p2p/ChatPanel';
+import { SavedGamesPanel } from '@/components/SavedGamesPanel';
 import type { P2PRoomContext } from '@/components/p2p/types';
+import type { HotseatStartPayload } from '@/components/lobby/HotseatSetup';
+import type { SavedGame } from '@/lib/savedGames';
 
 const NO_AI_PLAYERS: ReadonlySet<PlayerId> = new Set();
 
@@ -97,6 +100,15 @@ interface GameBoardAppProps {
    *  omitting it (the hotseat/online default) reproduces this component's exact pre-existing
    *  behavior with zero code-path changes for either of those modes. */
   p2p?: P2PRoomContext;
+  /** [DEFAULT — direct request: "a third tab which holds all saved games and allows you to
+   *  restore it"] Hotseat-only wiring for the Saves sidebar tab below (see
+   *  components/SavedGamesPanel.tsx) — threaded down from components/HotseatApp.tsx's LocalGame,
+   *  which already passes state/dispatch/etc. here. P2P's own call sites (components/p2p/
+   *  P2PApp.tsx) simply omit both: a P2P save has no in-place restore (that only happens via the
+   *  P2P main menu's "Resume a saved game" flow, hooks/use-p2p-host.ts's resumeFromSavedGame),
+   *  consistent with how `p2p` itself is optional and omitted for hotseat. */
+  currentHotseatPayload?: HotseatStartPayload;
+  onRestore?: (save: SavedGame) => void;
 }
 
 /** [DEFAULT — territory rework] What a MoveSoldiers march onto a given neighbour would actually
@@ -220,13 +232,25 @@ function IosSwitch({ checked, onChange, label, disabled = false }: { checked: bo
   );
 }
 
-export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = NO_AI_PLAYERS, onExit, p2p }: GameBoardAppProps) {
+export function GameBoardApp({
+  state,
+  dispatch,
+  error,
+  isMyTurn,
+  aiPlayerIds = NO_AI_PLAYERS,
+  onExit,
+  p2p,
+  currentHotseatPayload,
+  onRestore,
+}: GameBoardAppProps) {
   const [selectedCoord, setSelectedCoord] = useState<HexCoord | null>(null);
   // [DEFAULT — direct request: "a menu when I press ESC .. a little chat in a second tab of
-  // sidebar"] Both P2P-only — the listener and the tab strip below are simply never rendered/
-  // attached without a p2p context (hotseat/online), so Escape does nothing there, same as today.
+  // sidebar"] The listener and the admin menu below are P2P-only — never attached without a p2p
+  // context (hotseat/online), so Escape does nothing there, same as today.
   const [showAdminMenu, setShowAdminMenu] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'game' | 'chat'>('game');
+  // [DEFAULT — direct request: "a third tab which holds all saved games"] Unlike 'chat' (gated by
+  // p2p being present), 'saves' shows for BOTH hotseat and P2P — see the tab strip below.
+  const [sidebarTab, setSidebarTab] = useState<'game' | 'chat' | 'saves'>('game');
   useEffect(() => {
     if (!p2p) return;
     function onKeyDown(e: KeyboardEvent) {
@@ -529,20 +553,22 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
 
       <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden lg:pl-4">
         {/* [DEFAULT — direct request: "a little chat in a second tab of sidebar .. badge with
-            unread messages"] P2P-only — hotseat/online render nothing here at all (p2p is
-            undefined), reproducing the sidebar's exact pre-existing layout with zero change. */}
-        {p2p && (
-          <div className="flex shrink-0 gap-1 border-b border-hx-border">
-            <button
-              type="button"
-              onClick={() => setSidebarTab('game')}
-              className={clsx(
-                'flex-1 rounded-t-sm px-2 py-1.5 text-xs font-semibold transition',
-                sidebarTab === 'game' ? 'border-b-2 border-hx-gold text-hx-gold' : 'text-hx-ink-faint hover:text-hx-ink'
-              )}
-            >
-              🗺️ Game
-            </button>
+            unread messages" / "a third tab which holds all saved games"] Game+Saves always show;
+            Chat is P2P-only (hotseat/online have no `p2p` context and simply never render that
+            one button — reproducing the strip's exact pre-existing layout for those modes save
+            for the new Saves tab, which is deliberately NOT gated the same way). */}
+        <div className="flex shrink-0 gap-1 border-b border-hx-border">
+          <button
+            type="button"
+            onClick={() => setSidebarTab('game')}
+            className={clsx(
+              'flex-1 rounded-t-sm px-2 py-1.5 text-xs font-semibold transition',
+              sidebarTab === 'game' ? 'border-b-2 border-hx-gold text-hx-gold' : 'text-hx-ink-faint hover:text-hx-ink'
+            )}
+          >
+            🗺️ Game
+          </button>
+          {p2p && (
             <button
               type="button"
               onClick={() => setSidebarTab('chat')}
@@ -558,10 +584,28 @@ export function GameBoardApp({ state, dispatch, error, isMyTurn, aiPlayerIds = N
                 </span>
               )}
             </button>
-          </div>
-        )}
+          )}
+          <button
+            type="button"
+            onClick={() => setSidebarTab('saves')}
+            className={clsx(
+              'flex-1 rounded-t-sm px-2 py-1.5 text-xs font-semibold transition',
+              sidebarTab === 'saves' ? 'border-b-2 border-hx-gold text-hx-gold' : 'text-hx-ink-faint hover:text-hx-ink'
+            )}
+          >
+            💾 Saves
+          </button>
+        </div>
         {p2p && sidebarTab === 'chat' ? (
           <ChatPanel ctx={p2p} />
+        ) : sidebarTab === 'saves' ? (
+          <SavedGamesPanel
+            mode={p2p ? 'p2p' : 'hotseat'}
+            currentState={state}
+            currentAiControlledPlayerIds={p2p?.aiControlledPlayerIds}
+            currentHotseatPayload={currentHotseatPayload}
+            onRestore={onRestore}
+          />
         ) : (
       <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto">
         <div className={PANEL}>

@@ -29,6 +29,30 @@ export interface LobbyPlayerInfo {
   isHost: boolean;
 }
 
+/** [DEFAULT — direct request: "save a current game so it can be resumed later .. For WebRTC a
+ *  client can also save the game and resume it later as host .. the lobby should display the
+ *  original players slightly transparent and with a connect button"] The roster shape for
+ *  hooks/use-p2p-host.ts's 'resume-lobby' phase — one entry per seat that existed in the SAVED
+ *  GameState, not one per live connection (that's what plain LobbyPlayerInfo/lobbyUpdate already
+ *  covers for a from-scratch lobby). A resume-lobby's whole point is that the roster is fixed and
+ *  known up front from the save; what's *live* is only which of those fixed seats anyone has
+ *  actually reconnected to yet — that's `status`. */
+export interface ResumeLobbyPlayerInfo {
+  playerId: PlayerId;
+  name: string;
+  color: string;
+  /** True once this seat is occupied by whoever is CURRENTLY hosting the resumed room — set by
+   *  hooks/use-p2p-host.ts's claimSeatForSelf, never by a joiner's own claim. Purely informational
+   *  (a "host" badge in the roster UI), same as LobbyPlayerInfo.isHost above; it grants no extra
+   *  authority of its own; the room's real host is whoever this Peer/session actually is regardless
+   *  of which original seat they've claimed for themself. */
+  isHost: boolean;
+  /** 'ghost' = nobody has reconnected to this seat yet in THIS resume attempt (rendered slightly
+   *  transparent per the direct request above) — 'connected' once a human has claimed it, 'ai' if
+   *  the host has flipped it to AI control instead (see setSeatAiControl). */
+  status: 'connected' | 'ai' | 'ghost';
+}
+
 /** [DEFAULT — direct request: "a little chat in a second tab of sidebar"] Always relayed THROUGH
  *  the host (a joiner sends `chatSend`, never a raw ChatMessage) so id/sentAt come from one place
  *  and every peer — including the sender — ends up with the exact same message, same as how
@@ -113,7 +137,16 @@ export type P2PMessage =
    *  differently). */
   | { kind: 'chatMessage'; message: ChatMessage }
   /** Host -> every joiner: current direct-call address book for voice chat. */
-  | { kind: 'voicePeers'; peers: VoicePeerInfo[] };
+  | { kind: 'voicePeers'; peers: VoicePeerInfo[] }
+  /** [DEFAULT — direct request: "For WebRTC a client can also save the game and resume it later
+   *  as host .. it first shows the lobby where all players can connect again"] Host -> everyone,
+   *  sent INSTEAD of lobbyUpdate whenever the host is in the 'resume-lobby' phase (see
+   *  hooks/use-p2p-host.ts) — a fixed, save-derived roster (ResumeLobbyPlayerInfo[], not
+   *  LobbyPlayerInfo[]) rather than the ordinary lobby's grow-as-people-join one. Re-sent on every
+   *  roster change: a seat claimed (a joiner or the host reconnecting under an original playerId),
+   *  or an AI toggle — same "always the full authoritative snapshot" shape as lobbyUpdate/
+   *  stateSync, for the same self-healing reason. */
+  | { kind: 'resumeLobbyUpdate'; players: ResumeLobbyPlayerInfo[] };
 
 /** Human-typeable room code: Crockford-ish alphabet (no 0/O/1/I/L) so it reads back unambiguously
  *  read aloud or over chat. This is a TRANSPORT/session identifier, not game state — unrelated to

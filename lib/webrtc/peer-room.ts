@@ -19,7 +19,7 @@
  */
 
 import type { DataConnection, MediaConnection, Peer, PeerError, PeerErrorType } from 'peerjs';
-import type { JoinerMetadata, LobbyPlayerInfo, P2PMessage } from './protocol';
+import type { JoinerMetadata, LobbyPlayerInfo, P2PMessage, ResumeLobbyPlayerInfo } from './protocol';
 import { generateRoomCode, roomCodeToPeerId } from './protocol';
 
 async function loadPeerJs() {
@@ -340,9 +340,18 @@ export interface JoinRoomHandlers {
   onFatalError: (message: string) => void;
 }
 
+/** [DEFAULT — direct request: "save a current game .. resume it later as host"] Which kind of
+ *  waiting room probeLobby actually found — an ordinary from-scratch lobby (grow-as-people-join
+ *  roster, name/color still up for grabs) or a resumed room's fixed, save-derived ghost roster
+ *  (name/color entry doesn't apply there at all — see components/p2p/P2PApp.tsx's join-setup
+ *  screen, which switches its whole rendering based on this). */
+export type LobbyProbeResult =
+  | { mode: 'lobby'; players: LobbyPlayerInfo[] }
+  | { mode: 'resume-lobby'; players: ResumeLobbyPlayerInfo[] };
+
 /** One-shot roster fetch used by the join setup screen to disable already-taken options before
  *  connecting as a real player. */
-export async function probeLobby(roomCode: string): Promise<LobbyPlayerInfo[]> {
+export async function probeLobby(roomCode: string): Promise<LobbyProbeResult> {
   const PeerCtor = await loadPeerJs();
   const candidates = signalingCandidates();
   const fallbackCandidate: PeerCtorOptions = {
@@ -382,7 +391,7 @@ export async function probeLobby(roomCode: string): Promise<LobbyPlayerInfo[]> {
     tryCandidate(0, SIGNALING_RETRY_ATTEMPTS);
   });
 
-  return await new Promise<LobbyPlayerInfo[]>((resolve, reject) => {
+  return await new Promise<LobbyProbeResult>((resolve, reject) => {
     const probeMeta: JoinerMetadata = {
       name: '__probe__',
       color: '#000000',
@@ -392,8 +401,8 @@ export async function probeLobby(roomCode: string): Promise<LobbyPlayerInfo[]> {
     const conn = peer.connect(roomCodeToPeerId(roomCode), { metadata: probeMeta, reliable: true });
 
     let settled = false;
-    let gotLobbyUpdate = false;
-    const finish = (value: LobbyPlayerInfo[] | Error, isError = false) => {
+    let gotUpdate = false;
+    const finish = (value: LobbyProbeResult | Error, isError = false) => {
       if (settled) return;
       settled = true;
       try {
@@ -401,16 +410,25 @@ export async function probeLobby(roomCode: string): Promise<LobbyPlayerInfo[]> {
       } catch {}
       peer.destroy();
       if (isError) reject(value as Error);
-      else resolve(value as LobbyPlayerInfo[]);
+      else resolve(value as LobbyProbeResult);
     };
 
     const timer = setTimeout(() => finish(new Error('Lobby probe timed out'), true), 5000);
     conn.on('data', (data) => {
       const msg = data as P2PMessage;
-      if (msg.kind !== 'lobbyUpdate') return;
-      gotLobbyUpdate = true;
-      clearTimeout(timer);
-      finish(msg.players);
+      // [DEFAULT — direct request: "resume it later as host"] Whichever of the two the host
+      // actually sends back — see LobbyProbeResult's own doc comment for why there are two.
+      if (msg.kind === 'lobbyUpdate') {
+        gotUpdate = true;
+        clearTimeout(timer);
+        finish({ mode: 'lobby', players: msg.players });
+        return;
+      }
+      if (msg.kind === 'resumeLobbyUpdate') {
+        gotUpdate = true;
+        clearTimeout(timer);
+        finish({ mode: 'resume-lobby', players: msg.players });
+      }
     });
     conn.once('error', (err) => {
       clearTimeout(timer);
@@ -419,7 +437,7 @@ export async function probeLobby(roomCode: string): Promise<LobbyPlayerInfo[]> {
     conn.once('close', () => {
       if (settled) return;
       clearTimeout(timer);
-      if (gotLobbyUpdate) finish([]);
+      if (gotUpdate) finish({ mode: 'lobby', players: [] });
       else finish(new Error('Lobby probe closed before roster arrived'), true);
     });
   });

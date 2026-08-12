@@ -15,9 +15,14 @@ import { BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/component
 import { useP2PHost, type P2PHostPhase } from '@/hooks/use-p2p-host';
 import { useP2PJoin, type P2PJoinPhase } from '@/hooks/use-p2p-join';
 import { isPlausibleRoomCode, normalizeRoomCode, type LobbyPlayerInfo } from '@/lib/webrtc/protocol';
-import { probeLobby } from '@/lib/webrtc/peer-room';
+import { probeLobby, type LobbyProbeResult } from '@/lib/webrtc/peer-room';
 import { clearHostSession, clearJoinSession, loadHostSession, loadJoinSession, saveJoinSession } from '@/lib/webrtc/persistence';
+import { loadSavedGames, type SavedGame } from '@/lib/savedGames';
+import type { PlayerId } from '@/engine';
 import type { P2PRoomContext } from './types';
+import { ShareRoomCode } from './ShareRoomCode';
+import { ResumeHostLobby } from './ResumeHostLobby';
+import { ResumeJoinLobby } from './ResumeJoinLobby';
 
 const PALETTE = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316'];
 const DEFAULT_NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank'];
@@ -81,44 +86,9 @@ function LobbyRoster({ players }: { players: LobbyPlayerInfo[] }) {
   );
 }
 
-/** Room code + a shareable /p2p/<code> link, both one click from the clipboard — this is the
- *  thing a host has to actually get to their friends, so it gets the most visual weight on the
- *  whole screen. navigator.clipboard needs a secure context (https, or localhost in dev). */
-function ShareRoomCode({ roomCode }: { roomCode: string }) {
-  const [copied, setCopied] = useState<'code' | 'link' | null>(null);
-  const link = typeof window !== 'undefined' ? `${window.location.origin}/p2p/${roomCode}` : '';
-
-  async function copy(text: string, which: 'code' | 'link') {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(which);
-      setTimeout(() => setCopied(null), 1800);
-    } catch {
-      // Clipboard access denied/unavailable — the code is still shown on screen, just not
-      // one-click-copyable. Not worth a whole error state for.
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-2 rounded-sm border border-hx-gold/50 bg-hx-gold/10 p-3">
-      <span className="font-mono text-[10px] uppercase tracking-wide text-hx-ink-faint">Room code</span>
-      <button
-        type="button"
-        onClick={() => copy(roomCode, 'code')}
-        className="self-start font-display text-3xl font-bold tracking-[0.3em] text-hx-gold transition hover:text-hx-gold-bright"
-        title="Click to copy"
-      >
-        {roomCode}
-      </button>
-      <div className="flex items-center gap-2">
-        <button type="button" onClick={() => copy(link, 'link')} className={`${BTN_SECONDARY} flex-1 text-center`}>
-          {copied === 'link' ? '✓ Link copied' : copied === 'code' ? '✓ Code copied' : '🔗 Copy shareable link'}
-        </button>
-      </div>
-      <p className="text-[11px] text-hx-ink-faint">Share either one — joiners can type the code or open the link directly.</p>
-    </div>
-  );
-}
+// ShareRoomCode now lives in ./ShareRoomCode.tsx — see that file's own header comment for why it
+// was extracted out of here (components/p2p/ResumeHostLobby.tsx needs it too, without a circular
+// import back into this file).
 
 // ── Host ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -153,6 +123,7 @@ function P2PHostRoom({
   onBack,
   onLeave,
   onTransferredAway,
+  resumeFromSavedGame,
 }: {
   name: string;
   color: string;
@@ -164,23 +135,33 @@ function P2PHostRoom({
    *  as an argument here instead of closed over, and the caller (P2PApp) uses it to seed
    *  `committedRoomCode` before switching `screen` to 'join-room'. */
   onTransferredAway: (roomCode: string) => void;
+  /** [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+   *  Set only when this mount came from the menu's "Resume a saved game" flow — see
+   *  hooks/use-p2p-host.ts's own param of the same name for the precedence rule (an ordinary
+   *  reload of an already-hosting session always wins over this). */
+  resumeFromSavedGame?: SavedGame;
 }) {
   const hostInfo = useMemo(() => ({ name, color }), [name, color]);
   const roomCodeRef = useRef('');
-  const result = useP2PHost(hostInfo, {
-    onTransferredAway: () => onTransferredAway(roomCodeRef.current),
-  });
+  const result = useP2PHost(
+    hostInfo,
+    {
+      onTransferredAway: () => onTransferredAway(roomCodeRef.current),
+    },
+    resumeFromSavedGame
+  );
   // Written from an effect, not during render — this project's react-hooks/refs rule forbids
   // mutating a ref mid-render (see use-p2p-host.ts's identical comment on the READ side of this
   // same rule). Still up to date by the time onTransferredAway can possibly fire: that only ever
   // happens from a later user click, well after this effect has had a chance to run.
   useEffect(() => {
-    if (result.phase === 'lobby' || result.phase === 'active') roomCodeRef.current = result.roomCode;
+    if (result.phase === 'lobby' || result.phase === 'resume-lobby' || result.phase === 'active') roomCodeRef.current = result.roomCode;
   });
 
   if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label="Opening a room…" onCancel={onLeave} /></CenteredScreen>;
   if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
   if (result.phase === 'lobby') return <CenteredScreen><HostLobby hostState={result} onLeave={onLeave} /></CenteredScreen>;
+  if (result.phase === 'resume-lobby') return <CenteredScreen><ResumeHostLobby hostState={result} onLeave={onLeave} /></CenteredScreen>;
   // Unwrapped, same as components/HotseatApp.tsx's LocalGame — GameBoardApp's own grid fills the
   // page's full block width/height; a centering wrapper here would shrink it to content size.
   const ctx: P2PRoomContext = {
@@ -215,6 +196,7 @@ function P2PJoinRoom({
   onBack,
   onLeave,
   onBecameHost,
+  autoClaimPlayerId,
 }: {
   roomCode: string;
   name: string;
@@ -225,9 +207,25 @@ function P2PJoinRoom({
    *  hooks/use-p2p-join.ts's UseP2PJoinCallbacks — the hook has already seeded a host session to
    *  resume into by the time this fires, so all P2PApp needs to do is switch `screen`. */
   onBecameHost: () => void;
+  /** [DEFAULT — direct request: "no need to enter a name again; just use one of the players"] Set
+   *  when the join-setup screen itself already showed the ghost picker (because probeLobby found
+   *  a resume-lobby there) and the player picked a ghost before ever committing to join — this
+   *  mount claims it automatically the moment the connection is ready, instead of making them
+   *  click "Connect" a second time once they land here. */
+  autoClaimPlayerId?: PlayerId;
 }) {
   const myInfo = useMemo(() => ({ name, color }), [name, color]);
   const result: P2PJoinPhase = useP2PJoin(roomCode, myInfo, { onBecameHost });
+  const autoClaimedRef = useRef(false);
+
+  useEffect(() => {
+    if (!autoClaimPlayerId || autoClaimedRef.current) return;
+    if (result.phase !== 'resume-lobby') return;
+    const target = result.players.find((p) => p.playerId === autoClaimPlayerId);
+    if (!target) return; // roster hasn't arrived yet, or this id somehow isn't in it — try again next render
+    autoClaimedRef.current = true;
+    result.claimSeat(target.playerId, target.name, target.color);
+  }, [autoClaimPlayerId, result]);
 
   if (result.phase === 'connecting') return <CenteredScreen><ConnectingScreen label={`Connecting to room ${roomCode}…`} onCancel={onLeave} /></CenteredScreen>;
   if (result.phase === 'error') return <CenteredScreen><ErrorScreen message={result.message} onBack={onBack} /></CenteredScreen>;
@@ -240,6 +238,21 @@ function P2PJoinRoom({
             <p className="text-sm text-hx-ink-dim">Waiting for the host to start the game…</p>
           </div>
           <LobbyRoster players={result.players} />
+          <button type="button" onClick={onLeave} className={BTN_GHOST}>
+            ✖ Leave room
+          </button>
+        </div>
+      </CenteredScreen>
+    );
+  }
+  if (result.phase === 'resume-lobby') {
+    return (
+      <CenteredScreen>
+        <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-4`}>
+          <div className="flex flex-col gap-1">
+            <h2 className="font-display text-xl font-bold text-hx-ink">🚪 Room {roomCode}</h2>
+          </div>
+          <ResumeJoinLobby players={result.players} myPlayerId={result.myPlayerId} onClaim={result.claimSeat} />
           <button type="button" onClick={onLeave} className={BTN_GHOST}>
             ✖ Leave room
           </button>
@@ -270,7 +283,11 @@ function P2PJoinRoom({
 
 // ── Setup ────────────────────────────────────────────────────────────────────────────────────
 
-type Screen = 'menu' | 'host-setup' | 'host-room' | 'join-setup' | 'join-room';
+// [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+// 'resume-setup' is the new "pick which saved P2P game to resume" screen, reached from the menu
+// — distinct from 'host-setup' (which collects name/color for a FRESH room) since resuming a save
+// needs neither, the identities all come from the save itself once the host claims a seat.
+type Screen = 'menu' | 'host-setup' | 'host-room' | 'join-setup' | 'join-room' | 'resume-setup';
 
 export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; onExit: () => void }) {
   // [DEFAULT — direct request: "when a client reloads the tab he should be reconnected .. if
@@ -307,6 +324,17 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
   const [color, setColor] = useState(() => resumedHost?.color ?? resumedJoin?.color ?? PALETTE[0]);
   const [roomCodeInput, setRoomCodeInput] = useState(resumedJoin?.roomCode ?? initialRoomCode ?? '');
   const [committedRoomCode, setCommittedRoomCode] = useState(resumedJoin?.roomCode ?? '');
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // Which SavedGame the menu's "Resume a saved game" flow picked — threaded into P2PHostRoom's
+  // resumeFromSavedGame prop once `screen` becomes 'host-room'. Explicitly cleared whenever a
+  // FRESH (non-resume) host flow starts (see the menu screen's "Host a room" button below) so a
+  // later ordinary host doesn't accidentally inherit a stale save from an earlier resume attempt.
+  const [resumeSave, setResumeSave] = useState<SavedGame | null>(null);
+  // [DEFAULT — direct request: "no need to enter a name again; just use one of the players"]
+  // Which original seat the join-setup screen's ghost picker already chose, if this room turned
+  // out to be a resume-lobby BEFORE the player ever committed to joining — threaded into
+  // P2PJoinRoom so it can claim that seat automatically the instant its connection is ready.
+  const [autoClaimPlayerId, setAutoClaimPlayerId] = useState<PlayerId | undefined>(undefined);
 
   /** The top-level "leave P2P entirely" exit (landing page's Back / the shareable-link page's
    *  router.push('/')) should never leave a stale session behind for a LATER visit to silently
@@ -319,15 +347,21 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
 
   function leaveHostRoom() {
     clearHostSession();
+    setResumeSave(null);
     setScreen('menu');
   }
 
   function leaveJoinRoom() {
     clearJoinSession();
+    setAutoClaimPlayerId(undefined);
     setScreen('menu');
   }
 
-  const [joinLobbyPreview, setJoinLobbyPreview] = useState<LobbyPlayerInfo[]>([]);
+  // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+  // probeLobby now resolves a discriminated union (lib/webrtc/peer-room.ts's LobbyProbeResult) —
+  // an ordinary from-scratch lobby, or a resume-lobby's fixed ghost roster. Stored whole (not
+  // unwrapped into a plain players array like before) so the render below can branch on `mode`.
+  const [joinLobbyProbeResult, setJoinLobbyProbeResult] = useState<LobbyProbeResult | null>(null);
   const [joinLobbyProbeBusy, setJoinLobbyProbeBusy] = useState(false);
   const [joinLobbyProbeResolvedCode, setJoinLobbyProbeResolvedCode] = useState('');
   const joinProbeCode = useMemo(() => {
@@ -342,8 +376,8 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
     const t = setTimeout(() => {
       if (!cancelled) setJoinLobbyProbeBusy(true);
       void probeLobby(joinProbeCode)
-        .then((players) => {
-          if (!cancelled) setJoinLobbyPreview(players);
+        .then((result) => {
+          if (!cancelled) setJoinLobbyProbeResult(result);
         })
         .catch(() => {
           // Keep last known preview on transient probe failures.
@@ -405,13 +439,67 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
               else connects straight to them.
             </p>
           </div>
-          <button type="button" onClick={() => setScreen('host-setup')} className={BTN_PRIMARY}>
+          <button
+            type="button"
+            onClick={() => {
+              setResumeSave(null); // a fresh host flow must never inherit a stale resume — see its own comment
+              setScreen('host-setup');
+            }}
+            className={BTN_PRIMARY}
+          >
             🏰 Host a room
           </button>
           <button type="button" onClick={() => setScreen('join-setup')} className={BTN_SECONDARY}>
             🚪 Join a room
           </button>
+          {/* [DEFAULT — direct request: "For WebRTC a client can also save the game and resume
+              it later as host"] */}
+          <button type="button" onClick={() => setScreen('resume-setup')} className={BTN_SECONDARY}>
+            📂 Resume a saved game
+          </button>
           <button type="button" onClick={exitP2P} className={BTN_GHOST}>
+            ← Back
+          </button>
+        </div>
+      </CenteredScreen>
+    );
+  }
+
+  if (screen === 'resume-setup') {
+    const p2pSaves = loadSavedGames().filter((s) => s.mode === 'p2p');
+    return (
+      <CenteredScreen>
+        <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
+          <h2 className="font-display text-xl font-bold text-hx-ink">📂 Resume a saved game</h2>
+          {p2pSaves.length === 0 ? (
+            <p className="text-sm text-hx-ink-dim">
+              No saved P2P games yet — save one from the Saves tab in the sidebar during a game.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {p2pSaves.map((save) => (
+                <li key={save.id} className="flex items-center justify-between gap-2 rounded-sm border border-hx-border bg-hx-panel-2 px-2.5 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-hx-ink">{save.name}</p>
+                    <p className="font-mono text-[10px] text-hx-ink-faint">
+                      {new Date(save.savedAt).toLocaleString()} · {save.state.players.length} players
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResumeSave(save);
+                      setScreen('host-room');
+                    }}
+                    className={`${BTN_PRIMARY} px-2 py-1 text-[11px]`}
+                  >
+                    Resume as Host
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button type="button" onClick={() => setScreen('menu')} className={BTN_GHOST}>
             ← Back
           </button>
         </div>
@@ -450,19 +538,36 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
           setCommittedRoomCode(code);
           setScreen('join-room');
         }}
+        resumeFromSavedGame={resumeSave ?? undefined}
       />
     );
   }
 
   if (screen === 'join-setup') {
     const trimmedCode = normalizeRoomCode(roomCodeInput);
-    const rosterPreview = joinProbeCode ? joinLobbyPreview : [];
+    const probeReady = joinProbeCode.length > 0 && !joinLobbyProbeBusy && joinLobbyProbeResolvedCode === joinProbeCode;
+    // [DEFAULT — direct request: "a client can also save the game and resume it later as host"]
+    // mode: 'lobby' keeps the existing taken-name/taken-color validation exactly as it worked
+    // before probeLobby could return two different shapes; mode: 'resume-lobby' means name/color
+    // entry doesn't apply at all — see the ghost-picker branch in the JSX below.
+    const probeResult = probeReady ? joinLobbyProbeResult : null;
+    const isResumeRoom = probeResult?.mode === 'resume-lobby';
+    const rosterPreview = probeResult?.mode === 'lobby' ? probeResult.players : [];
     const takenColors = new Set(rosterPreview.map((p) => p.color.toLowerCase()));
     const normalizedName = name.trim().toLowerCase();
     const nameTaken = !!normalizedName && rosterPreview.some((p) => p.name.trim().toLowerCase() === normalizedName);
     const selectedColorTaken = takenColors.has(color.toLowerCase());
-    const probeReady = joinProbeCode.length > 0 && !joinLobbyProbeBusy && joinLobbyProbeResolvedCode === joinProbeCode;
-    const canJoin = isPlausibleRoomCode(trimmedCode) && name.trim().length > 0 && probeReady && !nameTaken && !selectedColorTaken;
+    const canJoin = !isResumeRoom && isPlausibleRoomCode(trimmedCode) && name.trim().length > 0 && probeReady && !nameTaken && !selectedColorTaken;
+
+    function commitJoin(roomCode: string, joinName: string, joinColor: string) {
+      // [DEFAULT — direct request: "when a client reloads the tab he should be reconnected"]
+      // Persisted BEFORE committing, so a reload even a moment after clicking "Join Room" (before
+      // the connection has fully opened) still has something to resume from.
+      saveJoinSession({ roomCode, name: joinName, color: joinColor });
+      setCommittedRoomCode(roomCode);
+      setScreen('join-room');
+    }
+
     return (
       <CenteredScreen>
         <div className={`${PANEL} mx-auto flex max-w-md flex-col gap-3`}>
@@ -477,33 +582,49 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
               className={`${INPUT} font-mono uppercase tracking-[0.3em]`}
             />
           </div>
-          {renderNameColorFields({ disabledColors: takenColors })}
-          <p className="text-[11px] text-hx-ink-faint">
-            {joinLobbyProbeBusy
-              ? 'Checking room roster…'
-              : joinLobbyProbeResolvedCode !== joinProbeCode
-                ? 'Waiting for room roster…'
-              : `${rosterPreview.length} player${rosterPreview.length === 1 ? '' : 's'} currently in room.`}
-          </p>
-          {nameTaken && <p className="text-xs text-hx-blood">That name is already taken in this room.</p>}
-          {selectedColorTaken && <p className="text-xs text-hx-blood">That color is already taken in this room.</p>}
-          <button
-            type="button"
-            disabled={!canJoin}
-            onClick={() => {
-              const trimmedName = name.trim() || randomDefaultName();
-              // [DEFAULT — direct request: "when a client reloads the tab he should be
-              // reconnected"] Persisted BEFORE committing, so a reload even a moment after
-              // clicking "Join Room" (before the connection has fully opened) still has
-              // something to resume from.
-              saveJoinSession({ roomCode: trimmedCode, name: trimmedName, color });
-              setCommittedRoomCode(trimmedCode);
-              setScreen('join-room');
-            }}
-            className={BTN_PRIMARY}
-          >
-            Join Room
-          </button>
+          {probeResult?.mode === 'resume-lobby' ? (
+            // [DEFAULT — direct request: "the lobby should display the original players slightly
+            // transparent and with a connect button .. no need to enter a name again; just use
+            // one of the players"] Reuses ResumeJoinLobby's own roster rendering — clicking a
+            // ghost's Connect button commits straight into the join flow with that specific
+            // playerId/name/color already decided (see autoClaimPlayerId, threaded into
+            // P2PJoinRoom below), not a second name/color form.
+            <ResumeJoinLobby
+              players={probeResult.players}
+              myPlayerId={null}
+              onClaim={(playerId, claimedName, claimedColor) => {
+                setName(claimedName);
+                setColor(claimedColor);
+                setAutoClaimPlayerId(playerId);
+                commitJoin(trimmedCode, claimedName, claimedColor);
+              }}
+            />
+          ) : (
+            <>
+              {renderNameColorFields({ disabledColors: takenColors })}
+              <p className="text-[11px] text-hx-ink-faint">
+                {joinLobbyProbeBusy
+                  ? 'Checking room roster…'
+                  : joinLobbyProbeResolvedCode !== joinProbeCode
+                    ? 'Waiting for room roster…'
+                  : `${rosterPreview.length} player${rosterPreview.length === 1 ? '' : 's'} currently in room.`}
+              </p>
+              {nameTaken && <p className="text-xs text-hx-blood">That name is already taken in this room.</p>}
+              {selectedColorTaken && <p className="text-xs text-hx-blood">That color is already taken in this room.</p>}
+              <button
+                type="button"
+                disabled={!canJoin}
+                onClick={() => {
+                  const trimmedName = name.trim() || randomDefaultName();
+                  setAutoClaimPlayerId(undefined); // an ordinary join never has a pre-picked ghost
+                  commitJoin(trimmedCode, trimmedName, color);
+                }}
+                className={BTN_PRIMARY}
+              >
+                Join Room
+              </button>
+            </>
+          )}
           <button type="button" onClick={() => setScreen('menu')} className={BTN_GHOST}>
             ← Back
           </button>
@@ -523,6 +644,7 @@ export function P2PApp({ initialRoomCode, onExit }: { initialRoomCode?: string; 
       onBack={leaveJoinRoom}
       onLeave={leaveJoinRoom}
       onBecameHost={() => setScreen('host-room')}
+      autoClaimPlayerId={autoClaimPlayerId}
     />
   );
 }
