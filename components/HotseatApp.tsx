@@ -6,6 +6,7 @@ import { createGame, type GameState, type PlayerId, type SetupPlayerInput } from
 import { useLocalGame } from '@/hooks/use-local-game';
 import { HotseatSetup, type HotseatStartPayload } from '@/components/lobby/HotseatSetup';
 import { GameBoardApp } from '@/components/GameBoardApp';
+import type { AdminMenuContext } from '@/components/AdminMenu';
 import { SCREEN_ART } from '@/components/screenArt';
 import { clearHotseatSession, loadHotseatSession, saveHotseatSession } from '@/lib/hotseatPersistence';
 import { SavedGamesPanel } from '@/components/SavedGamesPanel';
@@ -19,6 +20,7 @@ function LocalGame({
   resumedState,
   onExit,
   onRestore,
+  onToggleAi,
 }: {
   players: SetupPlayerInput[];
   aiPlayerIds: ReadonlySet<PlayerId>;
@@ -35,6 +37,11 @@ function LocalGame({
    *  components/SavedGamesPanel.tsx. Restoring mid-game replaces this entire LocalGame mount via
    *  HotseatApp's own handleRestore, same mechanism a fresh HotseatSetup start or an exit uses. */
   onRestore: (save: SavedGame) => void;
+  /** [DEFAULT — direct request: "The Escape Menu where you can change players from AI to Human
+   *  mid game should also be implemented in hotseat mode"] Owned by HotseatApp (it's the one that
+   *  holds `bundle.payload`, the actual source `aiPlayerIds` above is derived from) — this mount
+   *  just forwards it into GameBoardApp's ESC menu, see the hotseatAdmin construction below. */
+  onToggleAi: (playerId: PlayerId, isAI: boolean) => void;
 }) {
   const [initialState] = useState(() => resumedState ?? createGame(`local-${Date.now()}`, players, `${Date.now()}-${Math.random()}`, 'hotseat'));
   const { state, dispatch, error } = useLocalGame(initialState);
@@ -46,10 +53,26 @@ function LocalGame({
   // [DEFAULT — direct request: "sessions are persisted in localstorage so that the game
   // continues where left off when you reload the tab"] Every state change (production, a tile
   // placed, a build, a whole turn) re-saves — cheap relative to a click, and means "reload right
-  // now" never loses more than the in-flight click itself.
+  // now" never loses more than the in-flight click itself. Also what makes an AI toggle below
+  // (which updates `payload`, a dependency here) persist correctly across a reload.
   useEffect(() => {
     saveHotseatSession({ payload, state });
   }, [payload, state]);
+
+  // [DEFAULT — direct request: "The Escape Menu where you can change players from AI to Human
+  // mid game should also be implemented in hotseat mode"] No kick/transfer — hotseat is one
+  // shared device, there's no "other player" to remove or hand hosting to, just seats to flip
+  // between human and AI. myPlayerId is whoever's turn it currently is — pass-and-play has no
+  // other meaningful notion of "you" to badge in the roster.
+  const hotseatAdmin: AdminMenuContext = useMemo(
+    () => ({
+      myPlayerId: state.currentPlayerId,
+      players: payload.players.map((p) => ({ playerId: p.id, name: p.name, color: p.color, isHost: false })),
+      aiControlledPlayerIds: aiPlayerIds,
+      onToggleAi,
+    }),
+    [state.currentPlayerId, payload.players, aiPlayerIds, onToggleAi]
+  );
 
   return (
     <GameBoardApp
@@ -59,6 +82,7 @@ function LocalGame({
       isMyTurn={isMyTurn}
       aiPlayerIds={aiPlayerIds}
       onExit={onExit}
+      hotseatAdmin={hotseatAdmin}
       currentHotseatPayload={payload}
       onRestore={onRestore}
     />
@@ -126,6 +150,20 @@ export function HotseatApp({ onExit }: { onExit?: () => void }) {
     saveHotseatSession({ payload: save.hotseatPayload!, state: save.state });
     setShowLoadScreen(false);
     transition({ payload: save.hotseatPayload!, state: save.state });
+  }
+
+  /** [DEFAULT — direct request: "The Escape Menu where you can change players from AI to Human
+   *  mid game should also be implemented in hotseat mode"] Updates payload.players[x].isAI in
+   *  place — deliberately NOT going through `transition` (which always bumps `key` and would
+   *  force LocalGame to fully remount, discarding its live useLocalGame state, mid-turn, just to
+   *  flip a toggle). The new `payload` reference alone is enough: it flows down as a prop, which
+   *  both `aiPlayerIds` (a useMemo keyed on bundle.payload) and LocalGame's own autosave effect
+   *  (keyed on payload/state) already react to correctly. */
+  function handleToggleAi(playerId: PlayerId, isAI: boolean) {
+    setBundle((prev) => {
+      if (!prev.payload) return prev;
+      return { ...prev, payload: { ...prev.payload, players: prev.payload.players.map((p) => (p.id === playerId ? { ...p, isAI } : p)) } };
+    });
   }
 
   if (!bundle.payload || !players) {
@@ -211,6 +249,7 @@ export function HotseatApp({ onExit }: { onExit?: () => void }) {
       resumedState={bundle.state}
       onExit={handleExit}
       onRestore={handleRestore}
+      onToggleAi={handleToggleAi}
     />
   );
 }

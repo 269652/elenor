@@ -36,7 +36,7 @@ import { TradePanel } from '@/components/hud/TradePanel';
 import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, INPUT, PANEL } from '@/components/uiClasses';
 import { useAiTurn } from '@/hooks/use-ai-turn';
 import { IosSwitch } from '@/components/IosSwitch';
-import { AdminMenu } from '@/components/p2p/AdminMenu';
+import { AdminMenu, type AdminMenuContext } from '@/components/AdminMenu';
 import { ChatPanel } from '@/components/p2p/ChatPanel';
 import { SavedGamesPanel } from '@/components/SavedGamesPanel';
 import type { P2PRoomContext } from '@/components/p2p/types';
@@ -95,12 +95,20 @@ interface GameBoardAppProps {
    *  future mode) that doesn't have an "exit" concept yet simply omits it and no button renders. */
   onExit?: () => void;
   /** [DEFAULT — direct request: "a menu when I press ESC where the admin can manage the players
-   *  .. a little chat in a second tab of sidebar"] Present only for P2P play — hotseat has no
-   *  other players to manage or chat with, and online mode doesn't wire this up (yet). Its mere
-   *  presence is what gates the Escape listener, the admin menu, and the chat sidebar tab below —
-   *  omitting it (the hotseat/online default) reproduces this component's exact pre-existing
-   *  behavior with zero code-path changes for either of those modes. */
+   *  .. a little chat in a second tab of sidebar"] Present only for P2P play — chat/voice have no
+   *  hotseat equivalent, and online mode doesn't wire this up (yet). Its mere presence (alongside
+   *  hotseatAdmin below) gates the Escape listener and the admin menu, and on its own gates the
+   *  chat sidebar tab — omitting both (the online default) reproduces this component's exact
+   *  pre-existing behavior with zero code-path changes for that mode. */
   p2p?: P2PRoomContext;
+  /** [DEFAULT — direct request: "The Escape Menu where you can change players from AI to Human
+   *  mid game should also be implemented in hotseat mode"] Hotseat's OWN admin context — just
+   *  the roster + AI-toggle, no kick/transfer (hotseat has no "other device" to remove or hand
+   *  hosting to, it's one shared device). Threaded down from components/HotseatApp.tsx's
+   *  LocalGame. AdminMenuContext (components/AdminMenu.tsx) is a strict subset of P2PRoomContext,
+   *  so p2p above already satisfies this same shape when P2P play is what's active — see the
+   *  adminCtx computation below for how the two combine. */
+  hotseatAdmin?: AdminMenuContext;
   /** [DEFAULT — direct request: "a third tab which holds all saved games and allows you to
    *  restore it"] Hotseat-only wiring for the Saves sidebar tab below (see
    *  components/SavedGamesPanel.tsx) — threaded down from components/HotseatApp.tsx's LocalGame,
@@ -207,26 +215,31 @@ export function GameBoardApp({
   aiPlayerIds = NO_AI_PLAYERS,
   onExit,
   p2p,
+  hotseatAdmin,
   currentHotseatPayload,
   onRestore,
 }: GameBoardAppProps) {
   const [selectedCoord, setSelectedCoord] = useState<HexCoord | null>(null);
   // [DEFAULT — direct request: "a menu when I press ESC .. a little chat in a second tab of
-  // sidebar"] The listener and the admin menu below are P2P-only — never attached without a p2p
-  // context (hotseat/online), so Escape does nothing there, same as today.
+  // sidebar" + follow-up: "should also be implemented in hotseat mode"] p2p and hotseatAdmin are
+  // mutually exclusive in practice (a given GameBoardApp mount is either hotseat or P2P, never
+  // both), and p2p already structurally satisfies AdminMenuContext on its own — this just picks
+  // whichever one is actually present. The listener/menu attach whenever EITHER exists; online
+  // mode (neither) still gets zero code-path change, same as before.
+  const adminCtx: AdminMenuContext | undefined = p2p ?? hotseatAdmin;
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   // [DEFAULT — direct request: "a third tab which holds all saved games"] Unlike 'chat' (gated by
   // p2p being present), 'saves' shows for BOTH hotseat and P2P — see the tab strip below.
   const [sidebarTab, setSidebarTab] = useState<'game' | 'chat' | 'saves'>('game');
   useEffect(() => {
-    if (!p2p) return;
+    if (!adminCtx) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       setShowAdminMenu((v) => !v);
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [p2p]);
+  }, [adminCtx]);
   const [pendingPath, setPendingPath] = useState<HexCoord[]>([]);
   /** Armed march: the tile whose garrison is about to walk somewhere, and how many of them. */
   const [marchFrom, setMarchFrom] = useState<HexCoord | null>(null);
@@ -836,7 +849,7 @@ export function GameBoardApp({
         )}
       </div>
       </div>
-      {p2p && showAdminMenu && <AdminMenu ctx={p2p} onClose={() => setShowAdminMenu(false)} />}
+      {adminCtx && showAdminMenu && <AdminMenu ctx={adminCtx} onClose={() => setShowAdminMenu(false)} />}
     </>
   );
 }
