@@ -396,6 +396,19 @@ export function GameBoardApp({
     }
   }, [state.winnerId, state.winCondition, state.roundNumber, p2p]);
 
+  // [DEFAULT — direct request: "also add an event for when a player reaches round 10"]
+  // roundNumber is shared game state, not per-player, so "a player reaches round 10" is really
+  // "this client's own view of the game gets there" — exactly like game_start above, each
+  // connected P2P client (host and every joiner) tracks its own arrival independently. Same
+  // once-per-game ref-guard shape as trackedWinRef, and >= rather than === in case a future round
+  // transition ever skips a number.
+  const trackedRound10Ref = useRef(false);
+  useEffect(() => {
+    if (state.roundNumber < 10 || trackedRound10Ref.current) return;
+    trackedRound10Ref.current = true;
+    trackEvent('round_10_reached', { mode: p2p ? 'p2p' : 'hotseat' });
+  }, [state.roundNumber, p2p]);
+
   function clearModes() {
     setMarchFrom(null);
     setPendingAssault(null);
