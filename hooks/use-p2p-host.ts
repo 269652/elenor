@@ -114,6 +114,11 @@ const MIN_PLAYERS = 2;
 // components/p2p/P2PApp.tsx's HostLobby) can report the room's real capacity instead of a
 // hardcoded duplicate of this number.
 export const MAX_PLAYERS = 6;
+// [DEFAULT — direct request: "When playing and a client is disconnected it should wait 30s for
+// the client to reconnect if not AI will play the turn"] Only applies mid-game — a lobby-phase
+// disconnect is still removed from the roster immediately (below), there's no "wait, they might
+// come back" grace period before the game has even started.
+const DISCONNECT_AI_TAKEOVER_MS = 30_000;
 const VOICE_RETRY_INTERVAL_MS = 2000;
 const VOICE_CALL_STREAM_TIMEOUT_MS = 8000;
 
@@ -214,6 +219,20 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   // this device has ever hosted this room, so there's no "reset to human" regression to worry
   // about; the save's own AI status is the only prior status that exists at all.
   const aiControlledRef = useRef(new Set<PlayerId>(resumeSave ? resumeSave.aiControlledPlayerIds ?? [] : []));
+  // [DEFAULT — direct request: "When playing and a client is disconnected it should wait 30s for
+  // the client to reconnect if not AI will play the turn"] Pending DISCONNECT_AI_TAKEOVER_MS
+  // timers, one per stable playerId currently mid-countdown — cleared the instant that id
+  // reconnects (onJoinerConnected) or the host manually acts on that seat (setSeatAiControl/
+  // kickPlayer), so a reconnect that slips in right before the timer fires never races a
+  // needless takeover.
+  const disconnectTimersRef = useRef(new Map<PlayerId, ReturnType<typeof setTimeout>>());
+  // [DEFAULT — same direct request] Which seats are AI-controlled SPECIFICALLY because a
+  // disconnect timer fired — as opposed to the host deliberately choosing AI via the ESC admin
+  // menu or a resume-lobby claim. Only seats in this set get automatically handed back to human
+  // control when their original stable id reconnects; a host's own explicit choice (which removes
+  // the seat from this set the moment it's made — see setSeatAiControl) is never silently undone
+  // by a reconnect.
+  const disconnectAutoAiRef = useRef(new Set<PlayerId>());
   // [DEFAULT — direct request: "transfer hosting to another player"] This device's OWN effective
   // name/color, captured once the connect effect resolves them — transferHostTo needs these to
   // seed its own post-handoff join session, but effectiveName/effectiveColor are otherwise local
@@ -383,6 +402,11 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   useEffect(() => {
     let cancelled = false;
     let handle: PeerRoomHandle & { roomCode: string };
+    // Captured once, here — disconnectTimersRef.current is the same Map instance for this ref's
+    // entire lifetime (only ever mutated via .set()/.delete()/.clear(), never reassigned), so
+    // this is exactly equivalent to reading disconnectTimersRef.current directly inside the
+    // cleanup below, just in the form react-hooks/exhaustive-deps's ref-in-cleanup check expects.
+    const pendingDisconnectTimers = disconnectTimersRef.current;
 
     /** Recomputes the React-visible snapshot from playersRef (the real source of truth) and
      *  returns it, so callers can broadcast the exact same array they just rendered from. */
@@ -541,11 +565,35 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
               // the authoritative state) or, if that stable id was never in this game at all,
               // a straggler who dialed in after the lobby closed — same response either way,
               // there's no lobby to add them to anymore.
-              handleRef.current?.send(peerId, {
-                kind: 'stateSync',
+
+              // [DEFAULT — direct request: "wait 30s for the client to reconnect"] They're back —
+              // cancel any pending takeover countdown for this seat before it fires.
+              const pendingTimer = disconnectTimersRef.current.get(meta.playerId);
+              if (pendingTimer) {
+                clearTimeout(pendingTimer);
+                disconnectTimersRef.current.delete(meta.playerId);
+              }
+              // [DEFAULT — same direct request] If the countdown had ALREADY fired and put this
+              // seat under AI control, reconnecting reclaims it automatically — but only when
+              // THAT'S why it's AI (disconnectAutoAiRef); a host's own deliberate ESC-menu choice
+              // is never silently undone by a reconnect (setSeatAiControl removes a seat from
+              // disconnectAutoAiRef the moment it's used, precisely so this check can't catch it).
+              let aiStatusChanged = false;
+              if (disconnectAutoAiRef.current.delete(meta.playerId)) {
+                aiStatusChanged = aiControlledRef.current.delete(meta.playerId);
+              }
+              if (aiStatusChanged) setAiControlledPlayerIds(new Set(aiControlledRef.current));
+
+              const syncMsg = {
+                kind: 'stateSync' as const,
                 state: gameStateRef.current,
                 aiControlledPlayerIds: [...aiControlledRef.current],
-              });
+              };
+              // Everyone else's own aiControlledPlayerIds needs the update too, not just the
+              // reconnecting peer's — otherwise every other client keeps showing this seat's old
+              // 🤖 AI badge until their next unrelated stateSync happens to arrive.
+              if (aiStatusChanged) activeHandle.broadcast(syncMsg);
+              else handleRef.current?.send(peerId, syncMsg);
               if (!alreadyKnown) activeHandle.broadcast({ kind: 'lobbyUpdate', players: list });
               return;
             }
@@ -629,7 +677,37 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
             if (cancelled) return;
             const stablePlayerId = peerIdToPlayerId.current.get(peerId);
             peerIdToPlayerId.current.delete(peerId);
-            if (!stablePlayerId || gameStateRef.current) return; // mid-game: leave their seat, they may reconnect
+            if (!stablePlayerId) return;
+
+            if (gameStateRef.current) {
+              // [DEFAULT — direct request: "When a client which has joined a p2p room closes its
+              // tab it should leave the room. When playing and a client is disconnected it should
+              // wait 30s for the client to reconnect if not AI will play the turn"] Mid-game: not
+              // evicted from GameState.players outright (there's no such engine action, and
+              // turn-order/determinism depend on the seat list staying stable) — instead, count
+              // down DISCONNECT_AI_TAKEOVER_MS, and only if nobody's reconnected under this same
+              // stable id by the time it fires (checked fresh AT fire time, not assumed from this
+              // moment — see below), hand the seat to AI so the game doesn't just stall waiting on
+              // someone who's gone, whether they closed the tab deliberately or just dropped.
+              const stillConnectedNow = [...peerIdToPlayerId.current.values()].includes(stablePlayerId);
+              if (stillConnectedNow) return; // another live connection already speaks for this id (e.g. a StrictMode throwaway teardown)
+              if (aiControlledRef.current.has(stablePlayerId)) return; // already AI (host's own choice, or an earlier timeout) — nothing to do
+              const existingTimer = disconnectTimersRef.current.get(stablePlayerId);
+              if (existingTimer) clearTimeout(existingTimer);
+              const timer = setTimeout(() => {
+                disconnectTimersRef.current.delete(stablePlayerId);
+                if (cancelled) return;
+                const stillGone = ![...peerIdToPlayerId.current.values()].includes(stablePlayerId);
+                if (!stillGone || aiControlledRef.current.has(stablePlayerId) || !gameStateRef.current) return;
+                aiControlledRef.current.add(stablePlayerId);
+                disconnectAutoAiRef.current.add(stablePlayerId);
+                const next = new Set(aiControlledRef.current);
+                setAiControlledPlayerIds(next);
+                handleRef.current?.broadcast({ kind: 'stateSync', state: gameStateRef.current, aiControlledPlayerIds: [...next] });
+              }, DISCONNECT_AI_TAKEOVER_MS);
+              disconnectTimersRef.current.set(stablePlayerId, timer);
+              return;
+            }
 
             // Only evict from the roster if NO OTHER live connection still speaks for this
             // stable id — exactly the case that protects a StrictMode-throwaway connection's
@@ -763,6 +841,12 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
       inboundVoiceUnsubRef.current = null;
       handleRef.current?.close();
       handleRef.current = null;
+      // [DEFAULT — direct request: "wait 30s for the client to reconnect"] Not strictly required
+      // (the timer callbacks themselves already bail out on `cancelled`), but there's no reason
+      // to let them sit around ticking down toward a no-op — tidy up alongside everything else
+      // this cleanup already tears down.
+      for (const timer of pendingDisconnectTimers.values()) clearTimeout(timer);
+      pendingDisconnectTimers.clear();
     };
     // hostInfo intentionally not in deps — the room is created exactly once per mount, renaming
     // mid-session isn't supported (matches the hotseat lobby's own "set names before Start").
@@ -814,6 +898,17 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
   useAiTurn(gameState, aiControlledPlayerIds, dispatch);
 
   const setSeatAiControl = useCallback((playerId: PlayerId, isAI: boolean) => {
+    // [DEFAULT — direct request: "wait 30s for the client to reconnect .. AI will play the
+    // turn"] A manual choice here always supersedes the disconnect-timeout machinery — remove
+    // this seat from disconnectAutoAiRef (so a LATER reconnect never silently undoes what the
+    // host just deliberately set) and cancel any pending countdown for it (so a stale timer can't
+    // fire afterward and stomp this decision back to AI a moment later).
+    disconnectAutoAiRef.current.delete(playerId);
+    const pendingTimer = disconnectTimersRef.current.get(playerId);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      disconnectTimersRef.current.delete(playerId);
+    }
     if (isAI) aiControlledRef.current.add(playerId);
     else aiControlledRef.current.delete(playerId);
     const next = new Set(aiControlledRef.current);
@@ -884,6 +979,16 @@ export function useP2PHost(hostInfo: HostInfo, callbacks: UseP2PHostCallbacks = 
 
   const kickPlayer = useCallback((playerId: PlayerId) => {
     bannedPlayerIds.current.add(playerId);
+    // [DEFAULT — direct request: "wait 30s for the client to reconnect .. AI will play the
+    // turn"] Same reasoning as setSeatAiControl's identical cleanup — a kick is just as much a
+    // deliberate host action as the ESC-menu toggle, and bannedPlayerIds already makes a
+    // reconnect impossible anyway, but this keeps the bookkeeping honest either way.
+    disconnectAutoAiRef.current.delete(playerId);
+    const pendingTimer = disconnectTimersRef.current.get(playerId);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      disconnectTimersRef.current.delete(playerId);
+    }
     const targetPeerIds = [...peerIdToPlayerId.current.entries()].filter(([, pid]) => pid === playerId).map(([peerId]) => peerId);
     for (const peerId of targetPeerIds) handleRef.current?.send(peerId, { kind: 'kicked', reason: 'Removed by the host' });
     // Give the message a moment to actually reach the wire before pulling the connection out from
