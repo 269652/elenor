@@ -23,6 +23,7 @@ import {
   Phase,
   RESOURCE_TYPES,
   ROAD_COST,
+  ROAD_MIN_CAPITAL_TIER,
   SMITHY_CRAFT_COSTS,
   TILE_RESOURCE,
   VOLCANO_MONSTER_LEVEL,
@@ -230,6 +231,12 @@ function tileProducesFoodOrMeat(tile: Tile): boolean {
 }
 
 function considerBuildRoad(state: GameState, player: Player): Action | null {
+  // [DEFAULT — balance rework pass 5, direct request: "gate streets behind a city upgrade"]
+  // Mirrors reducers.ts's applyBuildRoad guard — without this the AI would keep proposing
+  // BuildRoad every Build phase before Tier 2, each one rejected as illegal (see
+  // hooks/use-ai-turn.ts's dispatch-failure fallback), wasting a tick on a move that can never
+  // succeed instead of falling straight through to whatever it can actually do this turn.
+  if (player.capitalTier < ROAD_MIN_CAPITAL_TIER) return null;
   if (countActionsThisTurn(state, player.id, (e) => e.type === 'RoadBuilt') >= MAX_ROADS_PER_TURN) return null;
 
   const best = bestRoadSegment(state, player);
@@ -498,7 +505,68 @@ function decideMove(state: GameState, player: Player): Action {
   // on one seed of a ten-seed sweep — 24 rounds, zero roads, zero wallet Wood at any point, while
   // the same player owned six Forest tiles. If there's a segment worth building and no Wood to
   // build it with, going and getting some IS the plan.
-  const wantsWoodForRoads = player.resources.Wood < 1 && bestRoadSegment(state, player) !== null;
+  //
+  // [DEFAULT — balance rework pass 5 follow-up #1, root cause of the Barracks-never-gets-built
+  // regression] `heroCanGatherMore` gates BOTH resource-seeking pulls below (this one and
+  // `neededForCapitalTier` just after it) — without it, a pull toward "a tile stockpiling resource
+  // X" applies its flat bonus even when the hero has zero room left to pick anything up, which can
+  // outscore the homeward-deposit pull in scoreDestination and strand the hero standing on a pile
+  // it structurally cannot touch. Traced action-by-action on the failing "ai-risk-layer-seed" (the
+  // wantsWoodForRoads bug, before it was also gated on capitalTier below): p1's hero filled its
+  // sack at round 5 standing on its own Wood-stockpiled home Forest tile, and NEVER MOVED AGAIN
+  // through round 11 — decideMove's own scoring showed staying put at 6.80, beating a return trip
+  // to the Capital to deposit (5.00), because the unconditional `+3 if tile.stockpile.Wood > 0`
+  // term outscored the entire homeward pull even though the hero had 0 remaining capacity and
+  // could not gather another unit of anything. The wallet stayed at literal zero for the rest of
+  // that game (confirmed separately: still 0 Wood/Stone/Ore/Gold and capitalTier 1 at round 119).
+  const heroCanGatherMore = remainingCarryCapacity(hero) > 0;
+  // [DEFAULT — balance rework pass 5 follow-up #2] Gated on capitalTier >= ROAD_MIN_CAPITAL_TIER
+  // (mirrors considerBuildRoad's own gate) — without this, bestRoadSegment still happily returns
+  // "the best segment I WOULD build" for a Tier 1 player even though ROAD_MIN_CAPITAL_TIER now
+  // makes every road illegal before Tier 2, so this pull used to fire from round 1 chasing a
+  // network that could not legally exist yet — the SAME deadlock shape as the capacity bug above,
+  // just triggered by an illegal goal instead of a full sack. This flag existed from an earlier
+  // "roads always buildable" design and was never updated when balance rework pass 5 introduced
+  // the Tier-2 gate; scoping it to the gate considerBuildRoad already respects removes the phantom
+  // pull during the whole Tier-1 opening (see neededForCapitalTier just below for what replaces it
+  // during that window — Wood is still worth fetching pre-Tier-2, just for the Capital bill, not
+  // a road that can't legally be built yet).
+  // [DEFAULT — balance rework pass 5 follow-up #5] Checks EVERY leg of ROAD_COST short in the
+  // wallet, not just Wood. ROAD_COST gained a Stone leg in the same pass that added the Tier-2
+  // gate ({Wood:2, Stone:1}, was Wood:1 only), but this term was never updated to match — it kept
+  // asking only "is Wood short," so a player sitting on plenty of Wood but 0 Stone (a very common
+  // split: Stone comes only from Hills/Quarry/Watchtower/Windmill/CowStable-tier-4 builds, all
+  // rarer than Wood's Forest/Sawmill/HuntingLodge/CowStable/Farm cluster) read as "doesn't want
+  // anything for roads" and never got steered toward a Stone tile. Measured on the "risk-a"/
+  // "risk-b"/"risk-d" seeds: capitalTier reached 2-3 but roadsBuilt stayed at 2-5 for the ENTIRE
+  // rest of a 79-90 round game, with Stone stuck at literal 0 in the wallet the whole time on
+  // seeds where it happened to matter. Same fix shape as neededForCapitalTier below.
+  const neededForRoad: Set<ResourceType> =
+    heroCanGatherMore && player.capitalTier >= ROAD_MIN_CAPITAL_TIER && bestRoadSegment(state, player) !== null
+      ? new Set(RESOURCE_TYPES.filter((r) => player.resources[r] < (ROAD_COST[r] ?? 0)))
+      : new Set<ResourceType>();
+  // [DEFAULT — balance rework pass 5 follow-up #3] The other half of closing the gap left by
+  // neededForRoad's Tier-2 gate: reaching Capital Tier 2 is now a hard PREREQUISITE for every road
+  // (ROAD_MIN_CAPITAL_TIER), so below that tier, closing out the Capital's own bill is the single
+  // most important errand the hero can run — nothing else it could carry unblocks the road network
+  // the rest of the economy depends on. Measured on "ai-risk-layer-seed" WITHOUT this term (i.e.
+  // with only follow-ups #1-#2 applied): the hero-freeze was fixed and buildings/trade started
+  // flowing, but Wood stayed at literal 0 for all three players for the entire 103-round game and
+  // nobody ever reached Capital Tier 2 — because nothing in scoreDestination singled out Wood (or
+  // Stone, or Food) as worth a special trip pre-Tier-2 the way the old wantsWoodForRoads used to,
+  // so the hero kept defaulting to whichever owned tile had the single biggest stockpile (usually
+  // Food/Meat, since Farm/CowStable are cheap and compound fast), and Capital's {Wood:3, Stone:3,
+  // Food:3} bill never got its Wood or Stone leg filled. Same shape as neededForRoad above (a flat
+  // bonus toward a tile stockpiling a needed resource) — folded into the SAME set passed to
+  // scoreDestination below, since the two are mutually exclusive by tier (this one is only ever
+  // nonempty below Tier 2, neededForRoad only at Tier 2+) and the scoring rule for "a resource
+  // worth a special trip" is identical either way.
+  const capitalNextTier = CAPITAL_TIERS[player.capitalTier];
+  const neededForCapitalTier: Set<ResourceType> =
+    heroCanGatherMore && player.capitalTier < ROAD_MIN_CAPITAL_TIER && capitalNextTier
+      ? new Set(RESOURCE_TYPES.filter((r) => player.resources[r] < (capitalNextTier.cost[r] ?? 0)))
+      : new Set<ResourceType>();
+  const neededResources: Set<ResourceType> = neededForRoad.size > 0 ? neededForRoad : neededForCapitalTier;
   // [DEFAULT — hero battle participation] See this file's WAR_CALL_* constants above for why this
   // exists: pulls the hero toward THIS turn's predicted territory-march origin, but only when the
   // fight is actually worth joining once there (heroWouldJoinIfPresent), so a march that wouldn't
@@ -510,12 +578,29 @@ function decideMove(state: GameState, player: Player): Action {
   // nothing else routes the hero through its own Smithy/Barracks specifically.
   const gearErrandTarget = findGearErrandTarget(state, player);
 
+  // [DEFAULT — balance rework pass 5 follow-up #6] Distance-decayed pull toward the nearest owned
+  // tile stockpiling a resource in `neededResources` — see neededForRoad/neededForCapitalTier's
+  // comments above for what that set contains and why. Without this, the in-range bonus down in
+  // scoreDestination only ever fires when that tile HAPPENS to already be within the hero's 2-hex
+  // movement range this turn, exactly the "only routes the hero there by accident" problem
+  // findGearErrandTarget/findQuestTarget/WAR_CALL_* already exist to solve for their own targets —
+  // this is the same fix, one target later. Measured on "risk-a" WITHOUT this pull (i.e. with only
+  // follow-ups #1-#5 applied): p3 reached Capital Tier 2 in the opening but never banked a single
+  // Stone for the rest of a 90-round game. Traced directly: a Hills tile one hex from the Capital
+  // (5 Stone sitting on it, confirmed reachable and IN the candidate list) scored 17.0 against a
+  // same-turn Monster-Den quest pull's 19.6 — a 2.6-point loss, but with no cross-turn pull of its
+  // own the Hills tile only ever competes on turns it's already in range purely by chance, and on
+  // "risk-a" it simply never won that coin flip in 90 rounds. A resourceErrandTarget pull lets it
+  // accumulate an advantage turn over turn as the hero gets closer, the same way gearErrandTarget
+  // already does for Smithy/Barracks errands.
+  const resourceErrandTarget = findResourceErrandTarget(state, player, neededResources);
+
   let bestCoord = hero.position;
-  let bestScore = scoreDestination(state, player, hero.position, quest, connected, starving, wantsWoodForRoads, warCallTarget, gearErrandTarget);
+  let bestScore = scoreDestination(state, player, hero.position, quest, connected, starving, warCallTarget, gearErrandTarget, neededResources, resourceErrandTarget);
   let bestPath: HexCoord[] = [];
 
   for (const { coord, path } of reachable) {
-    const s = scoreDestination(state, player, coord, quest, connected, starving, wantsWoodForRoads, warCallTarget, gearErrandTarget);
+    const s = scoreDestination(state, player, coord, quest, connected, starving, warCallTarget, gearErrandTarget, neededResources, resourceErrandTarget);
     if (s > bestScore) {
       bestScore = s;
       bestCoord = coord;
@@ -603,6 +688,32 @@ function findGearErrandTarget(state: GameState, player: Player): HexCoord | null
   return candidates.reduce((a, b) => (hexDistance(hero.position, a) <= hexDistance(hero.position, b) ? a : b));
 }
 
+/** [DEFAULT — balance rework pass 5 follow-up #6] See its call site in decideMove for the measured
+ *  story. Nearest owned tile with a nonzero stockpile of any resource in `needed` — nearest, not
+ *  biggest pile, because at these small magnitudes (a handful of Wood/Stone/Food) travel cost
+ *  dominates the decision far more than which pile is a unit or two bigger, the same reasoning
+ *  findGearErrandTarget already uses to pick between a Smithy and a Barracks. */
+const RESOURCE_ERRAND_BASE_VALUE = 5;
+const RESOURCE_ERRAND_TRAVEL_COST = 1;
+
+function findResourceErrandTarget(state: GameState, player: Player, needed: Set<ResourceType>): HexCoord | null {
+  if (needed.size === 0) return null;
+  const hero = player.hero;
+  let best: HexCoord | null = null;
+  let bestDistance = Infinity;
+  for (const coord of player.ownedTiles) {
+    const tile = state.map[hexKey(coord)];
+    if (!tile) continue;
+    if (!RESOURCE_TYPES.some((r) => needed.has(r) && tile.stockpile[r] > 0)) continue;
+    const distance = hexDistance(hero.position, coord);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = coord;
+    }
+  }
+  return best;
+}
+
 function scoreDestination(
   state: GameState,
   player: Player,
@@ -610,9 +721,10 @@ function scoreDestination(
   quest: QuestTarget | null = null,
   connected: Set<HexKey> = new Set(),
   starving = false,
-  wantsWoodForRoads = false,
   warCallTarget: HexCoord | null = null,
-  gearErrandTarget: HexCoord | null = null
+  gearErrandTarget: HexCoord | null = null,
+  neededResources: Set<ResourceType> = new Set(),
+  resourceErrandTarget: HexCoord | null = null
 ): number {
   const tile = tileAt(state, coord);
   if (!tile) return -Infinity;
@@ -649,10 +761,25 @@ function scoreDestination(
     // two resources upkeep can be paid in, and only what's in the WALLET counts, so a pile of
     // either sitting on a tile is worth a special trip.
     if (starving) score += Math.min(tile.stockpile.Food + tile.stockpile.Meat, remainingCarryCapacity(player.hero)) * 0.8;
-    // One Wood is one road segment is one tile that never needs this trip again — worth more per
-    // unit than any generic haul, which is why it gets its own term rather than a bigger weight.
-    if (wantsWoodForRoads && tile.stockpile.Wood > 0) score += 3;
-    if (tile.building?.type === 'HuntingLodge' && !player.hero.hasHuntedThisRound) score += 2;
+    // [DEFAULT — balance rework pass 5 follow-ups #3/#5] One unit of a resource the hero is
+    // actively short of for its next structural milestone (a road segment at Tier 2+, or Capital's
+    // own next-tier bill below Tier 2 — see neededForRoad/neededForCapitalTier's doc comments in
+    // decideMove, folded into the single `neededResources` set passed in here) is worth a special
+    // trip: that milestone is what the rest of the economy (roads, and everything roads unlock) is
+    // waiting on. Flat rather than per-resource-type so a tile holding two of three needed
+    // resources doesn't outbid a Barracks-plan earmark or a genuine emergency (starvationBonus) by
+    // accident.
+    if (neededResources.size > 0 && RESOURCE_TYPES.some((r) => neededResources.has(r) && tile.stockpile[r] > 0)) score += 3;
+    // [DEFAULT — balance rework pass 5 follow-up #4] Gated on remainingCarryCapacity > 0 — a Hunt
+    // is a Gather action like any other and decideGather itself refuses to gather AT ALL once
+    // capacity hits 0 (falls straight to AdvancePhase), so this bonus used to pull a full hero
+    // onto its own HuntingLodge tile for a Hunt it could never actually take. Same bug shape, same
+    // fix as the neededResources term above (see decideMove's comments for the
+    // measured deadlock), just found one layer later: on "ai-risk-layer-seed", once those two were
+    // fixed, p1's hero settled onto its OWN HuntingLodge tile at round 15 (full sack, 0 capacity)
+    // and stayed there rounds 16-20+ — this +2 (on top of the homeward pull's own 3.8 at that
+    // tile's distance) beat the 5.0 flat score for actually walking home and depositing.
+    if (tile.building?.type === 'HuntingLodge' && !player.hero.hasHuntedThisRound && remainingCarryCapacity(player.hero) > 0) score += 2;
   }
 
   // Distance-decayed pull toward the best Den anywhere on the map (see the QUEST_* constants).
@@ -674,6 +801,15 @@ function scoreDestination(
   // [DEFAULT — balance rework pass 4] See findGearErrandTarget's doc comment above decideMove.
   if (gearErrandTarget) {
     const pull = GEAR_ERRAND_BASE_VALUE - GEAR_ERRAND_TRAVEL_COST * hexDistance(coord, gearErrandTarget);
+    if (pull > 0) score += pull;
+  }
+
+  // [DEFAULT — balance rework pass 5 follow-up #6] See findResourceErrandTarget's doc comment
+  // above decideMove — the cross-turn counterpart of the in-range-only bonus further up (the one
+  // gated on `neededResources`), for the same reason gearErrandTarget exists alongside
+  // considerCraftGear/considerSellLoot's own in-range checks.
+  if (resourceErrandTarget) {
+    const pull = RESOURCE_ERRAND_BASE_VALUE - RESOURCE_ERRAND_TRAVEL_COST * hexDistance(coord, resourceErrandTarget);
     if (pull > 0) score += pull;
   }
 
@@ -1178,7 +1314,26 @@ function barracksPlanFor(state: GameState, player: Player, isMage: boolean): Bar
   // single die being rolled. Being eaten alive is worse than being hungry, so a live threat
   // overrides the food gate (and the Cow Stable urgency in findBestBuildCandidate then handles
   // the hunger it causes).
-  if (!hasFoodEngine(state, player) && !facesArmedRival(state, player)) return null;
+  //
+  // [DEFAULT — balance rework pass 5 follow-up #9, root cause of a PERMANENT starvation spiral
+  // distinct from #8's, but at the same root] The facesArmedRival override above additionally
+  // requires capitalTier >= ROAD_MIN_CAPITAL_TIER now. Below that tier roads — and therefore
+  // hasFoodEngine, and therefore ANY way to ever feed the army this override fields — are flatly
+  // illegal, so "being eaten alive is worse than being hungry" no longer trades a temporary problem
+  // for a temporary one: it trades no problem for a PERMANENT one, since there is no path out until
+  // Tier 2 regardless of how well the rest of the economy performs. Measured on "risk-d" WITHOUT
+  // this gate (i.e. with only follow-ups #1-#8 applied): two of three players fielded an emergency
+  // Barracks while still Tier 1 and then deserted soldiers on most of the game's remaining rounds —
+  // one of them (a Farmer with 12 Forest and 7 Hills tiles already owned, so not a terrain-scarcity
+  // problem) never reached Tier 2 in the entire 69-round game despite its hero visibly being routed
+  // toward Wood/Stone tiles by the neededForCapitalTier/resourceErrandTarget pulls (follow-ups #3
+  // and #6) — the ongoing army's upkeep simply out-competed that progress turn after turn, because
+  // fielding the army was never something this player's Tier-1 economy could actually sustain in
+  // the first place. A Tier-1 player facing a rival is better served racing to Tier 2 unarmed (still
+  // vulnerable, per the original bug this override exists to fix, but not additionally bleeding
+  // upkeep it can never pay) than fielding a garrison guaranteed to spend the rest of the game
+  // deserting. Once a player reaches Tier 2 the override behaves exactly as before.
+  if (!hasFoodEngine(state, player) && !(facesArmedRival(state, player) && player.capitalTier >= ROAD_MIN_CAPITAL_TIER)) return null;
 
   const site = barracksSiteFor(state, player);
   if (!site) return null;
@@ -1271,11 +1426,31 @@ function considerStarvationTrade(state: GameState, player: Player): Action | nul
   if (upkeepShortfallGroups(state, player) <= 0) return null;
   const giveAmount = player.bankTradeRatio[0];
 
+  // [DEFAULT — balance rework pass 5 follow-up #8, root cause of a PERMANENT starvation spiral,
+  // distinct from the one hasFoodEngine's own bug-fix comment describes above] While still below
+  // ROAD_MIN_CAPITAL_TIER, roads — and therefore hasFoodEngine, and therefore any durable fix to
+  // THIS shortfall — are flatly illegal, so reaching Capital Tier 2 is the one action that actually
+  // ends the emergency this function exists to patch over. Without this reserve, a Tier-1 player
+  // whose Barracks came from facesArmedRival overriding the food gate (see barracksPlanFor) stays
+  // in shortfall essentially every round for as long as the starvation lasts — which, absent Tier
+  // 2, is forever — so this function fires EVERY Build phase and, being checked before
+  // findBestBuildCandidate (where the Capital-tier upgrade itself is scored), greedily converts
+  // whatever Wood/Stone the hero's own neededForCapitalTier errand (decideMove) just delivered into
+  // Food before Capital Tier 2 ever gets a turn to spend it — permanently starving its own escape
+  // route. Measured on "risk-d" WITHOUT this reserve: p2 and p3 both fielded an emergency Barracks
+  // while still Tier 1, then deserted soldiers across roughly 45 of the remaining ~45 rounds each,
+  // NEVER reaching Tier 2 and NEVER laying a single road, ending a 76-round game with Food AND Meat
+  // both at 0-1 in the wallet. Reserving the still-unmet legs of Capital's own next-tier bill (only
+  // while below the road gate — past it, Capital's bill no longer blocks the fix, so this stops
+  // applying) breaks the cycle without touching the emergency logic for anyone already past Tier 1.
+  const capitalNextTier = player.capitalTier < ROAD_MIN_CAPITAL_TIER ? CAPITAL_TIERS[player.capitalTier] : undefined;
+
   let donor: ResourceType | null = null;
   let bestSurplus = giveAmount - 1;
   for (const r of RESOURCE_TYPES) {
     if (r === 'Food') continue;
-    const surplus = player.resources[r];
+    const reserved = capitalNextTier?.cost[r] ?? 0;
+    const surplus = player.resources[r] - reserved;
     if (surplus >= giveAmount && surplus > bestSurplus) {
       bestSurplus = surplus;
       donor = r;
@@ -1304,6 +1479,26 @@ function findBestBuildCandidate(
   // strips the Food that hero level-ups, buildings and Capital tiers are all waiting on. Scaled by
   // how many upkeep groups are actually unpaid, so the AI shouts louder the deeper the hole.
   const starvationBonus = Math.min(upkeepShortfallGroups(state, player), 3) * STARVING_MEAT_BONUS;
+
+  // [DEFAULT — balance rework pass 5 follow-up #7, root cause of the Barracks-never-gets-built
+  // regression on "ai-risk-layer-seed"] `plan.site` is only ever set once barracksPlanFor's full
+  // gate passes (hasFoodEngine or facesArmedRival) — but hasFoodEngine itself now requires a road
+  // network, which requires Capital Tier 2, which takes many rounds of its own economy-building
+  // first. In that whole window `plan` is null, so the OLD reservation below (`plan && ...`) does
+  // nothing, and CowStable/Farm — both Plains-only, both economically attractive from round 4-5 —
+  // are free to consume every Plains tile the player owns. barracksSiteFor itself has no
+  // hasFoodEngine dependency (it only needs an owned, empty, Plains tile), so it can reserve a site
+  // long before a full plan exists; MAX_BARRACKS gates it off once a Barracks is actually built, so
+  // this never blocks a second empty Plains tile from going to ordinary production once the army is
+  // real. Measured: on "ai-risk-layer-seed" WITHOUT this fix (i.e. with only follow-ups #1-#6
+  // applied), every one of the three players finished the game with tier>=1, some with 30+
+  // road-connected tiles and 200+ banked Meat/Food, yet EVERY owned Plains tile (8-9 per player)
+  // had already been built over by round ~15-20 — CowStable/Farm/HuntingLodge, in some order — so
+  // barracksSiteFor had nowhere left to point for the rest of the game and barracksBuilt stayed 0
+  // for all three seats, confirmed by direct inspection (0 empty Plains tiles, all three players,
+  // at game end).
+  const barracksReservedSite =
+    ownedBarracksTiles(state, player).length < MAX_BARRACKS ? plan?.site ?? barracksSiteFor(state, player) : null;
 
   const nextTier = CAPITAL_TIERS[player.capitalTier];
   if (nextTier) {
@@ -1374,8 +1569,9 @@ function findBestBuildCandidate(
       // Plains tile on a +1 producer, after which barracksSiteFor had nowhere left to point and
       // the army it had been saving for became unbuildable for the rest of the game. Measured: in
       // two of six all-AI games exactly one seat ever fielded soldiers, and the unarmed seats were
-      // simply walked over.
-      if (plan && buildingType !== 'Barracks' && hexKey(plan.site) === hexKey(coord)) continue;
+      // simply walked over. See barracksReservedSite's own doc comment above for why this now
+      // reserves a site even before `plan` exists, not just once it does.
+      if (barracksReservedSite && buildingType !== 'Barracks' && hexKey(barracksReservedSite) === hexKey(coord)) continue;
 
       const cost = isMage ? applyMageDiscount(def.cost) : def.cost;
       if (!canAffordCombined(player, player.hero, coord, cost)) continue;

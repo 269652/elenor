@@ -289,8 +289,31 @@ describe('decideAction — full-game integration against the real engine', () =>
     expect(seedsWithCombat, 'territory combat only happened on one lucky map').toBeGreaterThanOrEqual(3);
 
     // ...and it happened while the game was still being played, not as a one-off at the death.
+    //
+    // [DEFAULT — balance rework pass 5 follow-up] Threshold raised 15 -> 45. The 15 figure predates
+    // pass 5 (doubled production-building costs, ROAD_COST +Stone, and — the big one — roads/the
+    // whole automatic-income sweep flatly illegal before Capital Tier 2), from back when a Barracks
+    // could be affordable within the first handful of rounds. It no longer describes anything
+    // reachable, by a human or an AI: reaching Capital Tier 2 (itself resource-gated), THEN laying
+    // enough road to satisfy hasFoodEngine, THEN saving the Barracks's own 10-resource bill are now
+    // three sequential economy milestones the rules themselves impose one after another, not a
+    // heuristic-tuning gap — see ai/decideAction.ts's "balance rework pass 5 follow-up" comments
+    // (decideMove's neededForRoad/neededForCapitalTier/resourceErrandTarget, barracksPlanFor's
+    // capitalTier gate on facesArmedRival) for the AI-side half of adapting to that, which is what
+    // gets a Barracks built AT ALL now, reliably, across every seed here — up from a regression
+    // where at least one seed never built one. Measured on the current AI across these five seeds:
+    // Barracks completed rounds 26-57 (every player, every seed), first defended-tile combat rounds
+    // 35/41/58 on the three seeds where one occurred before the game otherwise ended (two seeds won
+    // by VP/Domination before any garrison stood to be attacked at all, which is a legitimate way
+    // for a game to end and not itself a failure — see the combats/seedsWithCombat assertions just
+    // above, which still require the war to have broken out on a solid majority of seeds). 45 sits
+    // below the earliest of those three (58) but with real margin above the very fastest measured
+    // (35), matching this file's own stated approach elsewhere of a bound with slack against
+    // measurement rather than a tight fit to one run — these are deterministic-but-chaotic
+    // simulations (see the border-soldier test's own comment on RNG-cursor cascades) where future
+    // AI or balance changes will shift the exact numbers again.
     const firstRounds = allGames().map((s) => s.firstTerritoryCombatRound).filter((r): r is number => r !== null);
-    expect(Math.min(...firstRounds), 'the war only ever starts in the endgame').toBeLessThanOrEqual(15);
+    expect(Math.min(...firstRounds), 'the war only ever starts in the endgame').toBeLessThanOrEqual(45);
   }, 120000);
 
   /**
@@ -377,6 +400,10 @@ describe('decideAction — full-game integration against the real engine', () =>
     state.currentPhase = Phase.Build;
     const p1 = state.players.find((p) => p.id === 'p1')!;
     p1.resources.Wood = 5; // enough to actually afford the segment
+    p1.resources.Stone = 5; // [DEFAULT — balance rework pass 5] ROAD_COST now spends Stone too
+    // [DEFAULT — balance rework pass 5] Roads require Capital Tier 2 (ROAD_MIN_CAPITAL_TIER) —
+    // a freshly created game starts at tier 1, which considerBuildRoad now refuses outright.
+    p1.capitalTier = 2;
 
     // An army already standing on the Capital is enough on its own to flip the food bias on —
     // see wantsFoodEconomy in decideAction.ts.
